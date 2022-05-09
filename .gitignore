@@ -1,0 +1,19 @@
+# Editor
+.vscode
+
+# Data
+**/*_dataset
+**/sample_data
+**/checkpoint-*
+
+# Temp Files
+**/cached_*
+notebooks/med.py
+notebooks/normalized_textual_file.py
+notebooks/*.txt
+
+# Notebooks
+# Reason: We only use python notebooks with special comments
+# that VS Code runs like notebooks
+
+*.ipynb
