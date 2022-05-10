@@ -25,7 +25,7 @@ def multireplace(string, replacements, ignore_case=False):
     :rtype: str
     """
     # If case insensitive, we need to normalize the old string so that later a replacement
-    # can be found. For instance with {"HEY": "lol"} we should match and find a replacement for "hey",
+    # can be found. For instance with {"HEY": "gilol"} we should match and find a replacement for "hey",
     # "HEY", "hEy", etc.
     if ignore_case:
         def normalize_old(s):
