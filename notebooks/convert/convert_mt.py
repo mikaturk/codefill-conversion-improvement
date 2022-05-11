@@ -14,6 +14,8 @@ import torch
 import signal
 from functools import wraps
 
+# os.chdir('/home/mika/rp/codefill/notebooks')
+
 save_stdout = sys.stdout
 
 def multireplace(string, replacements, ignore_case=False):
@@ -51,9 +53,10 @@ def multireplace(string, replacements, ignore_case=False):
     return pattern.sub(lambda match: replacements[normalize_old(match.group(0))], string)
 
 # %%
+debug_filenames = False
 
 def convert_mt(file, output_file):
-    print("starting "+output_file, file=save_stdout)
+    if debug_filenames: print("starting "+output_file, file=save_stdout)
 
     tmp_dir = tempfile.mkdtemp()
     with open (file, "r") as f:
@@ -212,7 +215,7 @@ def convert_mt(file, output_file):
     with open(output_file,'w') as f:
         f.write(code_converted)
     shutil.rmtree(tmp_dir)
-    print("finished "+output_file, file=save_stdout)
+    if debug_filenames: print("finished "+output_file, file=save_stdout)
 
 
 # %%
