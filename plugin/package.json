@@ -20,13 +20,13 @@
 	"contributes": {
 		"commands": [
 			{
-				"command": "codefill-plugin.sayHello",
-				"title": "Hello World"
+				"command": "codefill-plugin.generateAutoComplete",
+				"title": "CodeFill: Generate Autocomplete"
 			}
 		],
 		"keybindings": [
 			{
-				"command": "codefill-plugin.sayHello",
+				"command": "codefill-plugin.generateAutoComplete",
 				"key": "ctrl+alt+c",
 				"mac": "ctrl+cmd+c"
 			}

@@ -17,7 +17,7 @@ export function activate(context: ExtensionContext) {
 		context.globalState.update('codefill-identifier', rand(128, 32));
 	}
 
-	const disposable = vscode.commands.registerCommand('codefill-plugin.sayHello', async () => {
+	const disposable = vscode.commands.registerCommand('codefill-plugin.generateAutoComplete', async () => {
 
 		const editor = vscode.window.activeTextEditor;
 
