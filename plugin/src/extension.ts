@@ -5,34 +5,55 @@
 
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
-
 import fetch from 'node-fetch';
+
+import rand = require('csprng');
+import path = require('path');
+import fs = require('fs');
 
 export function activate(context: ExtensionContext) {
 
-	console.log("test");
-	
+	if (!context.globalState.get('codefill-identifier')) {
+		context.globalState.update('codefill-identifier', rand(128, 32));
+	}
+
 	const disposable = vscode.commands.registerCommand('codefill-plugin.sayHello', async () => {
-		// The code you place here will be executed every time your command is executed
 
-		const autocomplete_text = "def count_words(words):\n    ";
+		const editor = vscode.window.activeTextEditor;
 
-		const response = await fetch("https://codefill-plugin.mikaturk.nl:8443/v1/autocomplete", {
-			method: 'POST', 
-			body: JSON.stringify([autocomplete_text,""]), 
-			headers: {
-				'Content-Type': 'application/json'
+		vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: "Generating code completion... Please wait.",
+			cancellable: true
+		}, async (progress, token) => {
+			token.onCancellationRequested(() => {
+				console.log("Cancelled code completion...");
+			});
+
+			if (editor) {
+				const document = editor.document;
+				const documentText = document.getText();
+
+				const response = await fetch("https://codefill-plugin.mikaturk.nl:8443/v1/autocomplete", {
+					method: 'POST',
+					body: JSON.stringify([documentText, ""]),
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': 'Basic ' + context.globalState.get('codefill-identifier')
+					}
+				});
+
+				const json: any = await response.json();
+
+				await editor.edit(editBuilder => {
+					editBuilder.insert(editor.selection.active, json.completion);
+				});
 			}
 		});
-		const json: any = await response.json();
-		vscode.window.showInformationMessage(json.completion);
-
-		// Display a message box to the user
-		// vscode.window.showInformationMessage('Welcome to CodeFill IDE Auto Complete! :)');
 	});
 
 	context.subscriptions.push(disposable);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
-export function deactivate() {}
+export function deactivate() { }

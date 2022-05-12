@@ -23,6 +23,13 @@
 				"command": "codefill-plugin.sayHello",
 				"title": "Hello World"
 			}
+		],
+		"keybindings": [
+			{
+				"command": "codefill-plugin.sayHello",
+				"key": "ctrl+alt+c",
+				"mac": "ctrl+cmd+c"
+			}
 		]
 	},
 	"scripts": {
@@ -32,11 +39,13 @@
 		"watch": "tsc -watch -p ./"
 	},
 	"devDependencies": {
+		"@types/csprng": "^0.1.2",
 		"@types/node": "^14.17.0",
 		"@types/node-fetch": "^2.6.1",
 		"@types/vscode": "^1.47.0",
 		"@typescript-eslint/eslint-plugin": "^5.19.0",
 		"@typescript-eslint/parser": "^5.19.0",
+		"csprng": "^0.1.2",
 		"eslint": "^8.13.0",
 		"typescript": "^4.6.3"
 	},
