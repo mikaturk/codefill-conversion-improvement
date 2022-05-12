@@ -44,9 +44,11 @@ export function activate(context: ExtensionContext) {
 				});
 
 				const json: any = await response.json();
+				const jsonText = json.completion;
+				verifyAccuracy(editor.selection.active.line, jsonText.trim(), context);
 
 				await editor.edit(editBuilder => {
-					editBuilder.insert(editor.selection.active, json.completion);
+					editBuilder.insert(editor.selection.active, jsonText);
 				});
 			}
 		});
@@ -57,3 +59,26 @@ export function activate(context: ExtensionContext) {
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 export function deactivate() { }
+
+function verifyAccuracy(lineNumber: number, insertedCode: string, context: ExtensionContext) {
+	const editor = vscode.window.activeTextEditor;
+	
+	setTimeout(async () => {
+		const lineText = editor?.document.lineAt(lineNumber).text.trim();
+		const accepted = (insertedCode?.length != 0) && (lineText === insertedCode);
+		
+		await fetch("https://codefill-plugin.mikaturk.nl:8443/v1/suggestion_feedback", {
+			method: 'POST',
+			body: JSON.stringify(
+				{
+					"CodeSuggested": insertedCode,
+					"CodeAccepted": accepted
+				}
+			),
+			headers: {
+				'Content-Type': 'application/json',
+				'Authorization': 'Basic ' + context.globalState.get('codefill-identifier')
+			}
+		});
+	}, 15000);
+}

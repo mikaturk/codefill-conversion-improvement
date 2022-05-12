@@ -1,3 +1,2 @@
 def mulNumbers(a, b):
-    return a * b
-
+    product = a * b
