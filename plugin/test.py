@@ -1,2 +1,2 @@
-def mulNumbers(a, b):
-    return a / b
+def split_string(string):
+    test = ""
