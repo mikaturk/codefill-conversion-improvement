@@ -1,5 +1,6 @@
 
 # %%
+from io import BytesIO, StringIO
 import tempfile
 import shutil
 import os
@@ -13,8 +14,29 @@ import ast
 import torch
 import signal
 from functools import wraps
+import datetime
 
-# os.chdir('/home/mika/rp/codefill/notebooks')
+debug_filenames = False
+THREADS = 20
+MAX_PATHS = 20_000
+times_json = 'times_20k_v2.json'
+
+os.chdir('/mnt/mturk/cf_sample_data/')
+# starts = 'starts.csv'
+# with open(starts,'w') as fd:
+#     fd.write('')
+# finishes = 'finishes.csv'
+# with open(finishes,'w') as fd:
+#     fd.write('')
+
+
+converted_path = './converted_20k_v2/'
+if not os.path.exists(converted_path):
+    os.makedirs(converted_path)
+
+# processing_path = './processing/'
+# if not os.path.exists(processing_path):
+#     os.makedirs(processing_path)
 
 save_stdout = sys.stdout
 
@@ -29,6 +51,9 @@ def multireplace(string, replacements, ignore_case=False):
     # If case insensitive, we need to normalize the old string so that later a replacement
     # can be found. For instance with {"HEY": "gilol"} we should match and find a replacement for "hey",
     # "HEY", "hEy", etc.
+    if replacements == {}:
+        return string
+    
     if ignore_case:
         def normalize_old(s):
             return s.lower()
@@ -53,10 +78,15 @@ def multireplace(string, replacements, ignore_case=False):
     return pattern.sub(lambda match: replacements[normalize_old(match.group(0))], string)
 
 # %%
-debug_filenames = False
 
+# @func_set_timeout(2.5)
 def convert_mt(file, output_file):
     if debug_filenames: print("starting "+output_file, file=save_stdout)
+    # file_name_with_ext = path.split("/").pop()
+    # name = file_name_with_ext[:file_name_with_ext.rfind('.')]
+    # processing = processing_path + name + '.txt'
+
+    # open(processing, 'a').close()
 
     tmp_dir = tempfile.mkdtemp()
     with open (file, "r") as f:
@@ -217,9 +247,181 @@ def convert_mt(file, output_file):
     shutil.rmtree(tmp_dir)
     if debug_filenames: print("finished "+output_file, file=save_stdout)
 
+def convert_new_v2(file, output_file):
+    if debug_filenames: print("starting "+output_file, file=save_stdout)
+    with open (file, "r") as f:
+        text = f.read()  
+
+    replacements = {}
+    for node in ast.iter_child_nodes(ast.parse(text)):
+        if isinstance(node, ast.ImportFrom):
+            replacements.update({node.module: 'MODULE'})
+        if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
+            for i, v in enumerate(node.names):
+                if(node.names[i].asname):
+                    replacements.update({node.names[i].name: 'LIB'})                
+                    replacements.update({node.names[i].asname: 'ALIAS'})
+                else:
+                    replacements.update({node.names[i].name: 'LIBRARY'})
+
+
+    # reomve * from the dictionary (handle from module import * statement)
+    replacements.pop('*', None)
+    # print('List of modules and libraries to replace:\n', replacements)
+
+    # with open('med.py','w') as f:
+    #     f.write(multireplace(text, replacements, ignore_case = True))
+    med = multireplace(text, replacements, ignore_case = True)
+
+    # file = 'med.py'
+    # with open(file,'rb') as f:
+    #     tokens = list(tokenize.tokenize(f.readline))
+    tokens = tokenize.tokenize(BytesIO(med.encode('utf-8')).readline)
+
+        
+    ### extract important data from the output of tokenize package
+
+    last_line = 0
+    last_pos = 0
+    tokss = []
+    for token in tokens:
+        
+        tok_org = token.string
+        tok_text = token.string    
+        # tok_type = str(token).split('(')[2].split(')')[0]
+        tok_type = tokenize.tok_name[token.type]
+
+        # convert keywords to upper
+        if keyword.iskeyword(tok_text):
+            tok_type = str.upper(tok_text)
+        
+        #extract operations
+        # if tok_type == 'OP':
+        #     tok_type = tok_text
+
+
+        # getting rid of comments and empty lines
+        if tok_type in ['NL','NEWLINE','COMMENT']:
+            continue
+        
+        #retrieve the position
+        tok_line = token.start[0]
+        
+        if last_line == tok_line:
+            last_pos +=  1
+        else:
+            last_pos = 1
+        tok_pos = last_pos
+        last_line = tok_line
+        
+        tokss.append({'type':tok_type,
+                            'original':tok_org,
+                            'text':tok_text,
+                            'line':tok_line,
+                            'pos':tok_pos})
+
+    toks = pd.DataFrame(tokss)
+
+    # remove encoding lines and end of file
+    toks.line = toks.line.astype('int')
+    toks.pos = toks.pos.astype('int')
+    toks = toks.loc[~((toks.type == 'ENCODING') | (toks.type == 'ENDMARKER'))]
+    toks['doc'] = (toks.text.str.contains('"""') | toks.text.str.contains("'''"))
+    toks = toks.loc[~(toks.doc)].drop(['doc'],axis=1)
+
+    # toks.head(20)
+
+    indent = 0
+    last_line = 0
+
+    tokss = [] # PERF
+
+    for row in toks.itertuples():
+        if row.type == "INDENT":
+            indent +=1
+            continue
+        if row.type == "DEDENT":
+            indent -=1
+            continue
+        if row.line != last_line:
+            last_line = row.line
+            tokss.append({'type':'\n'+indent*'\t',
+                                'text':'\n'+indent*'\t',
+                                'line':row.line,
+                                'pos':row.pos-1})
+    
+    toks = pd.concat([toks, pd.DataFrame(tokss)])
+
+    toks = toks.loc[~((toks.type=='INDENT') | (toks.type=='DEDENT'))]
+    toks = toks.sort_values(['line','pos']).reset_index(drop=True)
+
+
+    # drop the first row (empty line)
+    toks.drop(toks.index[:1], inplace=True)
+
+    # toks.head(20)
+
+    # with open(file,'r') as f:
+    #     src = f.read()
+
+    src = text
+    stdout_backup = sys.stdout
+    dis_result = StringIO()
+    sys.stdout = dis_result
+    dis.dis(src)
+    sys.stdout = stdout_backup
+
+    # with open(tmp_dir + '/dis.txt','r') as f:
+    #     lines = f.readlines()
+    lines = dis_result.getvalue().split('\n')
+
+    # find global variables
+    glbls = [].copy()    
+    for l in lines:
+        clean = l.replace('>>',' ').strip().split()
+        if len(clean):
+            try:
+                int(clean[1])
+                line = int(clean[0])
+            except:
+                clean = [str(line)]+clean
+            if 'LOAD_GLOBAL' in clean:
+                # print('found a global!')
+                glbls.append((int(clean[0]),clean[-1].replace('(','').replace(')','')))
+
+    # adjust_lines = [True] * toks.shape[0]
+    for l,n in glbls:
+        # toks.loc[(toks.line==l) & (toks.text==n),'type'] = 'GLOBAL_VARIABLE'
+        line_eq = toks.loc[toks.line==l]
+        line_eq.loc[line_eq.text==n, 'type'] = 'GLOBAL_VARIABLE'
+        
+    # toks.loc[adjust_lines, 'type'] = 'GLOBAL_VARIABLE'
+
+    # toks .head(10) 
+
+    # text_imports = ' '.join(list(toks.text)).replace('\n ','\n').replace(' \n','\n').replace('\t ','\t').replace(' . ','.').replace(' (','(')
+    # text_imports = multireplace(text_imports, replacements, ignore_case = True)
+
+    # with open('normalized_textual_file.py','w') as f:
+    #     f.write(text_imports)
+
+    # toks.type = toks.apply(lambda x: x['text'] if x['text'] in ['LIBRARY','LIB','ALIAS','MODULE'] else x['type'], axis = 1)
+    toks.loc[toks['text'].isin(['LIBRARY','LIB','ALIAS','MODULE']), 'type'] = toks['text']
+
+    code_converted = ' '.join(list(toks.type)).replace('\n ','\n').replace(' \n','\n').replace('\t ','\t').replace(' . ','.').replace(' (','(')
+
+    final_replacements = {'GLOBAL_VARIABLE(':'FUNCTION_CALL(',                      
+    #                       'NAME.NAME':'NAME',
+                          'NAME(':'FUNCTION_CALL(',
+                          'NAME':'LOCAL_VARIABLE'}
+
+    code_converted = multireplace(code_converted, final_replacements, ignore_case = False)
+
+    with open(output_file,'w') as f:
+        f.write(code_converted)
+    if debug_filenames: print("finished "+output_file, file=save_stdout)
 
 # %%
-
 
 # def convert_n(n_paths):
 #     paths = [str(x) for x in Path(".").glob("./sample_data/data/*.py")]
@@ -237,25 +439,46 @@ def convert_mt(file, output_file):
 
 from pathlib import Path
 import glob
+import json
 
 from joblib import Parallel, delayed
 
-def convert_optional(path, converted_path):
-  try:
-      convert_mt(path, converted_path)
-      return converted_path
-  except:
-      return None
+def get_elapsed_us(start):
+    return get_us(start, datetime.datetime.now())
 
-paths = [str(x) for x in Path(".").glob("./sample_data/data/*.py")]
-paths = paths[:2000]
+def get_us(start, end):
+    dt = end - start
+    return dt.seconds * 1e6 + dt.microseconds
+
+
+def convert_optional(path, converted_path, ):
+#   with open(times,'a') as fd_times:
+    try:
+        b4 = datetime.datetime.now()
+        # with open(starts,'a') as fd_start:
+        #     fd_start.write('"' + path + '",\n')
+
+        convert_new_v2(path, converted_path)
+
+        return (converted_path, get_elapsed_us(b4), "s")
+    except:
+        # fd.write(path.split("/").pop() + ',-1\n')  
+        # with open(finishes,'a') as fd_finish:
+        #     fd_finish.write('"' + path + '",\n')
+        return (converted_path, get_elapsed_us(b4), "f")
+
+paths = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
+paths = paths[:MAX_PATHS]
 converted_paths = []
 for path in paths:
   file_name = path.split("/").pop()
-  converted_paths.append("./sample_data/converted/" + file_name[:file_name.rfind('.')] + ".txt")
+  converted_paths.append(converted_path + file_name[:file_name.rfind('.')] + ".txt")
 print("CONVERTING {} PYTHON FILES".format(len(paths)))
-converted_paths_opt = Parallel(n_jobs=-1)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths))
-converted_paths_filtered = list(filter(bool, converted_paths_opt))
+converted_paths_opt = Parallel(n_jobs=THREADS)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths))
+with open(times_json,'w') as fd:
+    fd.write(json.dumps(converted_paths_opt))
+    # fd.write('[\n'+',\n'.join(map(lambda x: "[\"{}\",{}]".format(*x),converted_paths_opt))+'\n]')
+converted_paths_filtered = list(filter(lambda x: x[2] == "s", converted_paths_opt))
 sys.stdout = save_stdout
 print("RESULT: {} FILES IN, {} FILES OUT".format(len(converted_paths), len(converted_paths_filtered)))
 
