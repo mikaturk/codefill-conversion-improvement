@@ -4,159 +4,215 @@
  * ------------------------------------------------------------------------------------------ */
 
 import * as vscode from 'vscode';
-import { workspace, ExtensionContext } from 'vscode';
-import fetch from 'node-fetch';
+import { ExtensionContext } from 'vscode';
 
-import rand = require('csprng');
-import path = require('path');
-import fs = require('fs');
+import rand from 'csprng';
+import fetch from 'node-fetch';
+import { v4 as uuidv4 } from 'uuid';
 
 export function activate(extensionContext: ExtensionContext) {
 
-	const disposable2 = vscode.commands.registerCommand(
-		'extension.inline-completion-settings',
-		() => {
-			vscode.window.showInformationMessage('Show settings');
-		}
-	);
+	console.log("RUNNING");
 
-	extensionContext.subscriptions.push(disposable2);
-
-
-	if (!extensionContext.globalState.get('codefill-identifier')) {
-		extensionContext.globalState.update('codefill-identifier', rand(128, 32));
+	if (!extensionContext.globalState.get('codefill-uuid')) {
+		extensionContext.globalState.update('codefill-uuid', rand(128, 16));
 	}
 
+	extensionContext.subscriptions.push(vscode.commands.registerCommand('verifyInsertion', verifyInsertion));
+
+	const codeForMeCompletionProvider = extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
+		async provideCompletionItems(document, position, token, context) {
+			const jsonResponse = await callToAPIAndRetrieve(document, position, extensionContext);
+			if (!jsonResponse) return undefined;
+			const completion = jsonResponse.completion;
+			if (completion == "") {
+				console.log("empty string");
+
+				return undefined;
+			}
+			console.log("Completion ", completion);
+
+			const completionToken = jsonResponse.completionToken;
+			console.log("CompletionToken", completionToken);
+
+			const apiKey = extensionContext.globalState.get('codefill-uuid');
+			const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + completion);
+			completionItem.sortText = '0.0000';
+			completionItem.insertText = completion;
+			completionItem.command = {
+				command: 'verifyInsertion',
+				title: 'Verify Insertion',
+				arguments: [position, completion, context, completionToken, apiKey]
+			};
+			return [completionItem];
+		}
+	}, '.', ' ', ',', '[', '(', '{', '~', '+', '/', '*', '-', '!', '&', '&&', '|', '||', '^', '**'));
+}
+
+async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vscode.Position, extensionContext: vscode.ExtensionContext): Promise<any | undefined> {
 	const editor = vscode.window.activeTextEditor;
+	if (!editor) return undefined;
 
-	const disposable = vscode.commands.registerCommand('codefill-plugin.generateAutoComplete', async () => {
+	const startPos = new vscode.Position(position.line, position.character - 1);
+	const endPos = new vscode.Position(position.line, position.character);
+	const range = new vscode.Range(startPos, endPos);
+	const character = document.getText(range);
+	const line = document.lineAt(position.line).text;
+	if (document.lineAt(position.line).text.slice(line.length - 1) !== character) return undefined;
+	console.log("Char = ", character);
 
-		vscode.window.withProgress({
-			location: vscode.ProgressLocation.Notification,
-			title: "Generating code completion... Please wait.",
-			cancellable: true
-		}, async (progress, token) => {
-			token.onCancellationRequested(() => {
-				console.log("Cancelled code completion...");
-			});
+	const startPosLine = new vscode.Position(position.line, 0);
+	const endPosLine = new vscode.Position(position.line, position.character);
+	const rangeLine = new vscode.Range(startPosLine, endPosLine);
 
-			if (editor) {
-				const filePath = editor.document.uri;
-				const document = editor.document;
-				const documentText = document.getText();
+	const lineSplit = document.getText(rangeLine).match(/[\w]+/g);
+	const lastWord = lineSplit?.pop();
+	console.log("lastWord = ", lastWord);
 
-				const response = await fetch("https://codefill-plugin.mikaturk.nl:8443/v1/autocomplete", {
-					method: 'POST',
-					body: JSON.stringify([documentText, ""]),
-					headers: {
-						'Content-Type': 'application/json',
-						'Authorization': 'Basic ' + extensionContext.globalState.get('codefill-identifier')
-					}
-				});
+	// DOT, AWAIT, ASSERT, RAISE, DEL, LAMBDA, YIELD, RETURN,
+	// EXCEPT, WHILE, FOR, IF, ELIF, ELSE, GLOBAL, IN, AND, NOT,
+	// OR, IS, BINOP, WITH
 
-				const json: any = await response.json();
-				const jsonText = json.completion;
-				verifyAccuracy(editor.selection.active.line, jsonText.trim(), extensionContext);
+	const allowedCharacters = ['.', ' ', ':', ',', '[', '(', '{', '~', '+', '/', '*', '-', '!', '&', '&&', '|', '||', '^', '**'];
 
-				const edit = new vscode.WorkspaceEdit();
-				edit.insert(filePath, editor.selection.active, jsonText);
-				workspace.applyEdit(edit);
+	if (character !== ' ' && !allowedCharacters.includes(character.trim())) return undefined;
 
-				// editor.edit(editBuilder => {
-				// 	editBuilder.insert(editor.selection.active, jsonText);
-				// });
+	const documentLineCount = document.lineCount - 1;
+	const lastLine = document.lineAt(documentLineCount);
+	const beginDocumentPosition = new vscode.Position(0, 0);
+	const firstHalfRange = new vscode.Range(beginDocumentPosition, position);
+
+	const lastLineCharacterOffset = lastLine.range.end.character;
+	const lastLineLineOffset = lastLine.lineNumber;
+	const endDocumentPosition = new vscode.Position(lastLineLineOffset, lastLineCharacterOffset);
+	const secondHalfRange = new vscode.Range(position, endDocumentPosition);
+
+	const firstHalf = editor.document.getText(firstHalfRange);
+	const secondHalf = editor.document.getText(secondHalfRange);
+
+	const triggerPoint = getTriggerPoint(lastWord, character);
+	console.log("tp: ", triggerPoint);
+
+	try {
+		const apiKey = extensionContext!.globalState.get('codefill-uuid');
+		const url = "https://code4me.me/api/v1/autocomplete";
+
+		const response = await fetch(url, {
+			method: "POST",
+			body: JSON.stringify(
+				{
+					"parts": [firstHalf, secondHalf],
+					"triggerPoint": null,
+					"language": "python"
+				}
+			),
+			headers: {
+				'Content-Type': 'application/json',
+				'Authorization': 'Bearer ' + apiKey
 			}
 		});
 
-		const provider2 = vscode.languages.registerCompletionItemProvider(
-			'python',
-			{
-				provideCompletionItems(document: vscode.TextDocument, position: vscode.Position) {
-					return [
-						new vscode.CompletionItem('true', vscode.CompletionItemKind.Method),
-						new vscode.CompletionItem('warn', vscode.CompletionItemKind.Method),
-						new vscode.CompletionItem('error', vscode.CompletionItemKind.Method),
-					];
-				}
-			},
-			';', ':'
-		);
+		if (!response.ok) {
+			console.error("Response status not OK! Status: ", response.status);
+			return undefined;
+		}
 
-		extensionContext.subscriptions.push(provider2);
-	});
+		const contentType = response.headers.get('content-type');
+		if (!contentType || !contentType.includes('application/json')) {
+			console.error("Wrong content type!");
+			return undefined;
+		}
 
-	extensionContext.subscriptions.push(disposable);
-
-	let someTrackingIdCounter = 0;
-	const provider: vscode.InlineCompletionItemProvider = {
-		provideInlineCompletionItems: async (document, position, context, token) => {
-			console.log('provideInlineCompletionItems triggered');
-
-			const regexp = /\/\/ \[(.+),(.+)\):(.*)/;
-			if (position.line <= 0) {
-				return;
-			}
-
-			const documentText = document.getText();
-
-			const response = await fetch("https://codefill-plugin.mikaturk.nl:8443/v1/autocomplete", {
-				method: 'POST',
-				body: JSON.stringify([documentText, ""]),
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': 'Basic ' + extensionContext.globalState.get('codefill-identifier')
-				}
-			});
-
-			const json: any = await response.json();
-			const jsonText = json.completion;
-			// verifyAccuracy(editor.selection.active.line, jsonText.trim(), extensionContext);
-
-			const lineBefore = document.lineAt(position.line - 1).text;
-			console.log(lineBefore);
-
-			const insertText = jsonText;
-
-			return [
-				{
-					insertText,
-					range: new vscode.Range(position.line, 4, position.line, editor!.document.lineAt(position.line).range.end.character),
-					someTrackingId: someTrackingIdCounter++,
-				},
-			] as MyInlineCompletionItem[];
-
-		},
-	};
-
-	vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, provider);
-}
-
-interface MyInlineCompletionItem extends vscode.InlineCompletionItem {
-	someTrackingId: number;
+		const json = await response.json();
+		if (!Object.prototype.hasOwnProperty.call(json, 'completion')) {
+			console.error("Completion field not found in response!");
+			return undefined;
+		}
+		return json;
+	} catch (e) {
+		console.error("Unexpected error: ", e);
+		return undefined;
+	}
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 export function deactivate() { }
 
-function verifyAccuracy(lineNumber: number, insertedCode: string, context: ExtensionContext) {
+function verifyInsertion(position: vscode.Position, completion: string, extensionContext: ExtensionContext, completionToken: string, apiKey: string) {
 	const editor = vscode.window.activeTextEditor;
+	const document = editor!.document;
+	let lineNumber = position.line;
+	let characterOffset = position.character;
+
+	const listener = vscode.workspace.onDidChangeTextDocument(event => {
+		for (const changes of event.contentChanges) {
+			console.log(changes);
+
+			const text = changes.text;
+			const changedLineNumber = changes.range.start.line;
+			if (changedLineNumber == lineNumber) {
+				if (changes.range.end.character < characterOffset + 1) {
+					if (changes.text === '') {
+						characterOffset -= changes.rangeLength;
+					} if (changes.text.includes('\n')) {
+						characterOffset = 0;
+						lineNumber += (text.match(/\n/g) || []).length;
+					} else {
+						characterOffset += changes.text.length;
+					}
+				}
+			} else if (lineNumber == 0 || changedLineNumber < lineNumber) {
+				lineNumber += (text.match(/\n/g) || []).length;
+			}
+
+			if (changes.range.end.line < lineNumber) {
+				if (changes.text === '') {
+					lineNumber -= changes.range.end.line - changedLineNumber;
+				}
+			}
+		}
+
+		const editor = vscode.window.activeTextEditor;
+
+		if (!editor) return undefined;
+
+		console.log("line = ", editor.document.lineAt(lineNumber).text);
+		console.log("Line loc = ", lineNumber);
+		const startPos = new vscode.Position(lineNumber, characterOffset);
+		const endPos = new vscode.Position(lineNumber, characterOffset + 1);
+		const range = new vscode.Range(startPos, endPos);
+		const character = document.getText(range);
+		console.log("Char = ", character);
+		console.log("Char loc = ", characterOffset);
+	});
+
+
 
 	setTimeout(async () => {
-		const lineText = editor?.document.lineAt(lineNumber).text.trim();
-		const accepted = (insertedCode?.length != 0) && (lineText === insertedCode);
-
-		await fetch("https://codefill-plugin.mikaturk.nl:8443/v1/suggestion_feedback", {
+		listener.dispose();
+		console.log("send");
+		const lineText = editor?.document.lineAt(lineNumber).text;
+		console.log(lineText?.substring(characterOffset));
+		
+		fetch("https://code4me.me/api/v1/completion", {
 			method: 'POST',
 			body: JSON.stringify(
 				{
-					"CodeSuggested": insertedCode,
-					"CodeAccepted": accepted
+					"completionToken": completionToken,
+					"completion": completion,
+					"line": lineText?.substring(characterOffset).trim
 				}
 			),
 			headers: {
 				'Content-Type': 'application/json',
-				'Authorization': 'Basic ' + context.globalState.get('codefill-identifier')
+				'Authorization': 'Bearer ' + apiKey
 			}
 		});
 	}, 15000);
+}
+
+function getTriggerPoint(lastWord: string | undefined, character: string) {
+	if (lastWord == undefined) return undefined;
+	if (character == " ") return lastWord;
+	return character;
 }
