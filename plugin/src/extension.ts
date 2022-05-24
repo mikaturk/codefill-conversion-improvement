@@ -27,6 +27,7 @@ function debounce<T extends readonly unknown[], R>(fn: (...args: T) => R, cancel
 
 		const timer = setTimeout(() => {
 			resolve(fn(...args) as Awaited<R>);
+			clearTimer = () => undefined;
 		}, ms);
 
 		clearTimer = () => {
@@ -73,9 +74,35 @@ export function activate(extensionContext: ExtensionContext) {
 	extensionContext.subscriptions.push(vscode.commands.registerCommand('verifyInsertion', verifyInsertion));
 
 	const codeForMeCompletionProvider = extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
-		provideCompletionItems: debounce((...args) => provideCompletionItems(...removeLast(args), codeFillUuid), undefined, 300)
+		async provideCompletionItems(document, position, token, context) {
+			const jsonResponse = await callToAPIAndRetrieve(document, position, codeFillUuid);
+			if (!jsonResponse) return undefined;
+			const completion = jsonResponse.completion;
+			if (completion == "") {
+				console.log("empty string");
+				return undefined;
+			}
+			console.log("Completion ", completion);
+
+			const completionToken = jsonResponse.completionToken;
+			const apiKey = extensionContext.globalState.get('codefill-uuid');
+
+			const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + completion);
+			completionItem.sortText = '0.0000';
+			completionItem.insertText = completion;
+			completionItem.command = {
+				command: 'verifyInsertion',
+				title: 'Verify Insertion',
+				arguments: [position, completion, context, completionToken, apiKey]
+			};
+			
+			return [completionItem];
+		}
 	}, ' ', '.', '+', '-', '*', '/', '%', '*', '<', '>', '&', '|', '^', '=', '!', ';', ',', '[', '(', '{', '~'));
-	// 	}, '.', '+', '-', '*', '/', '%', '**', '<<', ">>", '&', '|', '^', '==', '!=', ';', ',', '[', '(', '{', '~', '='));
+	// const codeForMeCompletionProvider = extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
+	// 	provideCompletionItems: debounce((...args) => provideCompletionItems(...removeLast(args), codeFillUuid), undefined, 300)
+	// }, ' ', '.', '+', '-', '*', '/', '%', '*', '<', '>', '&', '|', '^', '=', '!', ';', ',', '[', '(', '{', '~'));
+	// // 	}, '.', '+', '-', '*', '/', '%', '**', '<<', ">>", '&', '|', '^', '==', '!=', ';', ',', '[', '(', '{', '~', '='));
 }
 
 async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vscode.Position, codeFillUuid: string): Promise<any | undefined> {
