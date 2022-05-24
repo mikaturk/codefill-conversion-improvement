@@ -58,7 +58,9 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 	const range = new vscode.Range(startPos, endPos);
 	const character = document.getText(range);
 	const line = document.lineAt(position.line).text;
-	if (document.lineAt(position.line).text.slice(line.length - 1) !== character) return undefined;
+	
+	if (position.character !== line.length) return undefined;
+	
 	console.log("Char = ", character);
 
 	const startPosLine = new vscode.Position(position.line, 0);
