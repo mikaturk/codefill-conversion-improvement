@@ -27,15 +27,13 @@ export function activate(extensionContext: ExtensionContext) {
 			const completion = jsonResponse.completion;
 			if (completion == "") {
 				console.log("empty string");
-
 				return undefined;
 			}
 			console.log("Completion ", completion);
 
 			const completionToken = jsonResponse.completionToken;
-			console.log("CompletionToken", completionToken);
-
 			const apiKey = extensionContext.globalState.get('codefill-uuid');
+
 			const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + completion);
 			completionItem.sortText = '0.0000';
 			completionItem.insertText = completion;
@@ -44,16 +42,18 @@ export function activate(extensionContext: ExtensionContext) {
 				title: 'Verify Insertion',
 				arguments: [position, completion, context, completionToken, apiKey]
 			};
+
 			return [completionItem];
 		}
-	}, '.', ' ', ',', '[', '(', '{', '~', '+', '/', '*', '-', '!', '&', '&&', '|', '||', '^', '**'));
+	}, '.', '+', '-', '*', '/', '%', '*', '<', ">", '&', '|', '^', '=', '!', ';', ',', '[', '(', '{', '~'));
+	// 	}, '.', '+', '-', '*', '/', '%', '**', '<<', ">>", '&', '|', '^', '==', '!=', ';', ',', '[', '(', '{', '~', '='));
 }
 
 async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vscode.Position, extensionContext: vscode.ExtensionContext): Promise<any | undefined> {
 	const editor = vscode.window.activeTextEditor;
 	if (!editor) return undefined;
 
-	const startPos = new vscode.Position(position.line, position.character - 1);
+	const startPos = new vscode.Position(position.line, position.character - 2);
 	const endPos = new vscode.Position(position.line, position.character);
 	const range = new vscode.Range(startPos, endPos);
 	const character = document.getText(range);
@@ -75,7 +75,7 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 	// EXCEPT, WHILE, FOR, IF, ELIF, ELSE, GLOBAL, IN, AND, NOT,
 	// OR, IS, BINOP, WITH
 
-	const allowedCharacters = ['.', ' ', ':', ',', '[', '(', '{', '~', '+', '/', '*', '-', '!', '&', '&&', '|', '||', '^', '**'];
+	const allowedCharacters = ['.', ' ', '+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^', '==', '!=', ';', ',', '[', '(', '{', '~', '='];
 
 	if (character !== ' ' && !allowedCharacters.includes(character.trim())) return undefined;
 
@@ -91,7 +91,7 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 
 	const firstHalf = editor.document.getText(firstHalfRange);
 	const secondHalf = editor.document.getText(secondHalfRange);
-
+	
 	const triggerPoint = getTriggerPoint(lastWord, character);
 	console.log("tp: ", triggerPoint);
 
