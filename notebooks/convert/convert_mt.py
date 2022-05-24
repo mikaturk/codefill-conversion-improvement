@@ -450,22 +450,21 @@ def get_us(start, end):
 
 
 def convert_optional(path, converted_path, ):
-#   with open(times,'a') as fd_times:
-    tmp_dir = tempfile.mkdtemp()
+    # Uncomment when using convert_new    
+    # tmp_dir = tempfile.mkdtemp()
 
     try:
         b4 = datetime.datetime.now()
-        # with open(starts,'a') as fd_start:
-        #     fd_start.write('"' + path + '",\n')
 
+        # convert_new(path, converted_path, tmp_dir)
         convert_new_v2(path, converted_path)
-        shutil.rmtree(tmp_dir)
+        
+        # Uncomment when using convert_new    
+        # shutil.rmtree(tmp_dir)
         return (converted_path, get_elapsed_us(b4), "s")
     except:
-        # fd.write(path.split("/").pop() + ',-1\n')  
-        # with open(finishes,'a') as fd_finish:
-        #     fd_finish.write('"' + path + '",\n')
-        shutil.rmtree(tmp_dir)
+        # Uncomment when using convert_new    
+        # shutil.rmtree(tmp_dir)
         return (converted_path, get_elapsed_us(b4), "f")
 
 paths = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
