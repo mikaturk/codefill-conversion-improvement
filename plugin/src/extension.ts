@@ -6,29 +6,38 @@
 import * as vscode from 'vscode';
 import { ExtensionContext } from 'vscode';
 
-import rand = require('csprng');
-import path = require('path');
-import fs = require('fs');
+import rand from 'csprng';
 import fetch from 'node-fetch';
+import {v4 as uuidv4} from 'uuid';
 
 export function activate(extensionContext: ExtensionContext) {
 
-	if (!extensionContext.globalState.get('codefill-identifier')) {
-		extensionContext.globalState.update('codefill-identifier', rand(128, 32));
+	if (!extensionContext.globalState.get('codefill-uuid')) {
+		extensionContext.globalState.update('codefill-uuid', uuidv4());
 	}
 
-	extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
-		async provideCompletionItems(document, position, token, context): Promise<vscode.CompletionItem[]> {
-			const val = await callToAPIAndRetrieve(document, extensionContext);
-			if (!val) return [];
-			const simpleCompletion = new vscode.CompletionItem(val);
-			simpleCompletion.sortText = '0.0.0.0.0';
-			return [simpleCompletion];
+	extensionContext.subscriptions.push(vscode.commands.registerCommand('verifyInsertion', verifyInsertion));
+
+	const codeForMeCompletionProvider = extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
+		async provideCompletionItems(document, position, token, context) {
+			const jsonResponse = await callToAPIAndRetrieve(document, extensionContext);
+			if (!jsonResponse) return undefined;
+			const completion = jsonResponse.completion;
+			const completionToken = jsonResponse.completionToken; 
+			const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + completion);
+			completionItem.sortText = '0.0000';
+			completionItem.insertText = completion;
+			completionItem.command = {
+				command: 'verifyInsertion',
+				title: 'Verify Insertion',
+				arguments: [position.line, completion, context, completionToken]
+			};
+			return [completion];
 		}
-	}, '.', ' ', ':', ',', '[', '(', '{', '~', '+', '/', '*', '-', '!', '&', '&&', '|', '||', '^', '**'))
+	}, '.', ' ', ',', '[', '(', '{', '~', '+', '/', '*', '-', '!', '&', '&&', '|', '||', '^', '**'));
 }
 
-async function callToAPIAndRetrieve(document: vscode.TextDocument, extensionContext: vscode.ExtensionContext): Promise<string | undefined> {
+async function callToAPIAndRetrieve(document: vscode.TextDocument, extensionContext: vscode.ExtensionContext): Promise<any | undefined> {
 	const editor = vscode.window.activeTextEditor;
 
 	if (!editor) return undefined;
@@ -37,7 +46,7 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, extensionCont
 	const startPos = new vscode.Position(currPos.line, currPos.character - 1);
 	const endPos = new vscode.Position(currPos.line, currPos.character);
 	const range = new vscode.Range(startPos, endPos);
-	const character = editor.document.getText(range);
+	const character = document.getText(range);
 	console.log("Char = ", character);
 
 	const line = document.lineAt(currPos.line);
@@ -51,20 +60,31 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, extensionCont
 
 	const allowedCharacters = ['.', ' ', ':', ',', '[', '(', '{', '~', '+', '/', '*', '-', '!', '&', '&&', '|', '||', '^', '**'];
 
-	if (!allowedCharacters.includes(character)) return undefined;
+	if (!allowedCharacters.includes(character)) {
+		console.log("rejected");
+		
+		return undefined;
+	}
 
 	try {
-		const apiKey = extensionContext!.globalState.get('codefill-identifier');
-		var url = "https://codefill-plugin.mikaturk.nl/v1/autocomplete";
+		const apiKey = extensionContext!.globalState.get('codefill-uuid');
+		const url = "https://code4me.me/api/v1/autocomplete";
 
 		const response = await fetch(url, {
 			method: "POST",
-			body: JSON.stringify([document.getText(), ""]),
+			// body: JSON.stringify([document.getText(), ""]),
+			body: JSON.stringify(
+				{
+					"parts": [document.getText(), ""],
+					"triggerPoint": null,
+					"language": 'python'
+				}
+			),
 			headers: {
 				'Content-Type': 'application/json',
-				'Authorization': 'Basic ' + apiKey
+				'Authorization': 'Bearer ' + apiKey
 			}
-		})
+		});
 
 		if (!response.ok) {
 			return undefined;
@@ -76,11 +96,10 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, extensionCont
 		}
 
 		const json = await response.json();
-		if (!json.hasOwnProperty('completion')) { 
+		if (!Object.prototype.hasOwnProperty.call(json, 'completion')) {
 			return undefined;
 		}
-		console.log("Resolving ", json.completion);
-		return json.completion;
+		return json;
 	} catch (e) {
 		return undefined;
 	}
@@ -89,24 +108,49 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, extensionCont
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 export function deactivate() { }
 
-function verifyAccuracy(lineNumber: number, insertedCode: string, context: ExtensionContext) {
+function verifyInsertion(lineNumber: number, completion: string, context: ExtensionContext, completionToken: string) {
 	const editor = vscode.window.activeTextEditor;
 
-	setTimeout(async () => {
-		const lineText = editor?.document.lineAt(lineNumber).text.trim();
-		const accepted = (insertedCode?.length != 0) && (lineText === insertedCode);
+	const listener = vscode.workspace.onDidChangeTextDocument(event => {
+		for (const changes of event.contentChanges) {
+			console.log(changes);
 
-		await fetch("https://codefill-plugin.mikaturk.nl:8443/v1/suggestion_feedback", {
+			const text = changes.text;
+			if (changes.range.start.line < lineNumber) {
+				lineNumber += (text.match(/\n/g) || []).length;
+			}
+
+			if (changes.range.end.line < lineNumber) {
+				if (changes.text === '') {
+					lineNumber -= changes.range.end.line - changes.range.start.line;
+				}
+			}
+		}
+
+		const editor = vscode.window.activeTextEditor;
+
+		if (!editor) return undefined;
+
+		console.log("line = ", editor.document.lineAt(lineNumber).text);
+		console.log("Line loc = ", lineNumber);
+	});
+
+
+	setTimeout(async () => {
+		listener.dispose();
+		const lineText = editor?.document.lineAt(lineNumber).text.trim();
+		await fetch("https://code4me.me/api/v1/completion", {
 			method: 'POST',
 			body: JSON.stringify(
 				{
-					"CodeSuggested": insertedCode,
-					"CodeAccepted": accepted
+					"completionToken": completionToken,
+					"completion": completion,
+					"line": lineText
 				}
 			),
 			headers: {
 				'Content-Type': 'application/json',
-				'Authorization': 'Basic ' + context.globalState.get('codefill-identifier')
+				'Authorization': 'Bearer ' + context.globalState.get('codefill-uuid')
 			}
 		});
 	}, 15000);
