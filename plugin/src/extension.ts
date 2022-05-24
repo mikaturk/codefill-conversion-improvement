@@ -105,7 +105,8 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 				{
 					"parts": [firstHalf, secondHalf],
 					"triggerPoint": null,
-					"language": "python"
+					"language": "python",
+					"ide": "VSC"
 				}
 			),
 			headers: {
