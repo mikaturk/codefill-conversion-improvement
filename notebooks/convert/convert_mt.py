@@ -80,7 +80,7 @@ def multireplace(string, replacements, ignore_case=False):
 # %%
 
 # @func_set_timeout(2.5)
-def convert_mt(file, output_file):
+def convert_mt(file, output_file, tmp_dir):
     if debug_filenames: print("starting "+output_file, file=save_stdout)
     # file_name_with_ext = path.split("/").pop()
     # name = file_name_with_ext[:file_name_with_ext.rfind('.')]
@@ -88,7 +88,6 @@ def convert_mt(file, output_file):
 
     # open(processing, 'a').close()
 
-    tmp_dir = tempfile.mkdtemp()
     with open (file, "r") as f:
         text = f.read()  
 
@@ -244,7 +243,6 @@ def convert_mt(file, output_file):
     code_converted = multireplace(code_converted, final_replacements, ignore_case = False)
     with open(output_file,'w') as f:
         f.write(code_converted)
-    shutil.rmtree(tmp_dir)
     if debug_filenames: print("finished "+output_file, file=save_stdout)
 
 def convert_new_v2(file, output_file):
@@ -452,19 +450,21 @@ def get_us(start, end):
 
 
 def convert_optional(path, converted_path, ):
-#   with open(times,'a') as fd_times:
+    # Uncomment when using convert_new    
+    # tmp_dir = tempfile.mkdtemp()
+
     try:
         b4 = datetime.datetime.now()
-        # with open(starts,'a') as fd_start:
-        #     fd_start.write('"' + path + '",\n')
 
+        # convert_new(path, converted_path, tmp_dir)
         convert_new_v2(path, converted_path)
-
+        
+        # Uncomment when using convert_new    
+        # shutil.rmtree(tmp_dir)
         return (converted_path, get_elapsed_us(b4), "s")
     except:
-        # fd.write(path.split("/").pop() + ',-1\n')  
-        # with open(finishes,'a') as fd_finish:
-        #     fd_finish.write('"' + path + '",\n')
+        # Uncomment when using convert_new    
+        # shutil.rmtree(tmp_dir)
         return (converted_path, get_elapsed_us(b4), "f")
 
 paths = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
