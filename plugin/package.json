@@ -16,6 +16,7 @@
 	},
 	"activationEvents": [
 		"onCommand:codefill-plugin.generateAutoComplete",
+		"editor.action.triggerSuggest",
 		"onLanguage:python"
 	],
 	"main": "./out/extension.js",
