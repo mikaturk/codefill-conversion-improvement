@@ -23,9 +23,10 @@ export function activate(extensionContext: ExtensionContext) {
 			if (!jsonResponse) return undefined;
 
 			const listPredictionItems = jsonResponse.predictions;
+			if (listPredictionItems.length == 0) return undefined;
 			const completionToken = jsonResponse.verifyToken;
-			if (listPredictionItems.length == 0 || !completionToken) return undefined;
 			
+
 			return listPredictionItems.map((prediction: string) => {
 				const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + prediction);
 				completionItem.sortText = '0.0000';
@@ -41,19 +42,26 @@ export function activate(extensionContext: ExtensionContext) {
 	}, ' ', '.', '+', '-', '*', '/', '%', '*', '<', '>', '&', '|', '^', '=', '!', ';', ',', '[', '(', '{', '~'));
 }
 
-async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vscode.Position, codeFillUuid: string): Promise<any | undefined> {
-	const editor = vscode.window.activeTextEditor;
-	if (!editor) return undefined;
-
-	const startDoubleCharacterPos = new vscode.Position(position.line, position.character - 2);
+/**
+ * Returns the trigger character used for the completion.
+ * @param document the document the completion was triggered.
+ * @param position the current position of the cursor.
+ * @returns triggerCharacter string or null (manual trigger suggest) or undefined if no trigger character was found.
+ */
+function getTriggerCharacter(document: vscode.TextDocument, position: vscode.Position) {
 	const endPos = new vscode.Position(position.line, position.character);
-	const rangeDoubleCharacter = new vscode.Range(startDoubleCharacterPos, endPos);
-
 	const startSingleCharacterPos = new vscode.Position(position.line, position.character - 1);
 	const rangeSingleCharacter = new vscode.Range(startSingleCharacterPos, endPos);
 
-	const singleCharacter = document.getText(rangeSingleCharacter);
+	const startDoubleCharacterPos = new vscode.Position(position.line, position.character - 2);
+	const rangeDoubleCharacter = new vscode.Range(startDoubleCharacterPos, endPos);
+
+	const startTripleCharacterPos = new vscode.Position(position.line, position.character - 3);
+	const rangeTripleCharacter = new vscode.Range(startTripleCharacterPos, endPos);
+
+	const singleCharacter = document.getText(rangeSingleCharacter).trim();
 	const doubleCharacter = document.getText(rangeDoubleCharacter).trim();
+	const tripleCharacter = document.getText(rangeTripleCharacter).trim();
 
 	const line = document.lineAt(position.line).text;
 
@@ -64,20 +72,36 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 	const rangeLine = new vscode.Range(startPosLine, endPosLine);
 
 	const lineSplit = document.getText(rangeLine).match(/[\w]+/g);
-	const lastWord = lineSplit?.pop();
+	if (lineSplit == null) return null;
+	const lastWord = lineSplit!.pop()!;
 
-	// DOT, AWAIT, ASSERT, RAISE, DEL, LAMBDA, YIELD, RETURN,
-	// EXCEPT, WHILE, FOR, IF, ELIF, ELSE, GLOBAL, IN, AND, NOT,
-	// OR, IS, BINOP, WITH
+	const allowedTriggerCharacters = ['.', '+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^', '+=', '-=', '==', '!=', ';', ',', '[', '(', '{', '~', '=', '<=', '>='];
+	const allowedTriggerWords = ['await', 'assert', 'raise', 'del', 'lambda', 'yield', 'return', 'while', 'for', 'if', 'elif', 'else', 'global', 'in', 'and', 'not', 'or', 'is'];
 
-	const allowedCharacters = ['.', '+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^', '+=', '-=', '==', '!=', ';', ',', '[', '(', '{', '~', '='];
-
-	let triggerCharacter = doubleCharacter;
-	if (!allowedCharacters.includes(doubleCharacter)) {
-		triggerCharacter = singleCharacter;
-		if (!allowedCharacters.includes(singleCharacter)) return undefined;
+	let triggerCharacter = lastWord;
+	if (!allowedTriggerWords.includes(triggerCharacter)) {
+		triggerCharacter = tripleCharacter;
+		if (!allowedTriggerCharacters.includes(triggerCharacter))
+		triggerCharacter = doubleCharacter;
+		if (!allowedTriggerCharacters.includes(triggerCharacter)) {
+			triggerCharacter = singleCharacter;
+			if (!allowedTriggerCharacters.includes(triggerCharacter)) return undefined;
+		}
 	}
 
+	return triggerCharacter;
+}
+
+/**
+ * 
+ * @param nCharacters the amount of characters taken left and right of the cursor.
+ * @param position the cursor position.
+ * @returns an array with index 0 the left text and index 1 the right text. Empty strings if text editor cannot be found.
+ */
+function splitTextAtCursor(nCharacters: number, position: vscode.Position): string[] {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor) return ['', ''];
+	const document = editor.document;
 	const documentLineCount = document.lineCount - 1;
 	const lastLine = document.lineAt(documentLineCount);
 	const beginDocumentPosition = new vscode.Position(0, 0);
@@ -91,17 +115,24 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 	const leftText = editor.document.getText(leftRange);
 	const rightText = editor.document.getText(rightRange);
 
-	const triggerPoint = getTriggerPoint(lastWord, triggerCharacter);
+	return [leftText.substring(-nCharacters), rightText.substring(0, nCharacters)];
+}
+
+async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vscode.Position, codeFillUuid: string): Promise<any | undefined> {
+	const textArray = splitTextAtCursor(1024, position);
+	const triggerPoint = getTriggerCharacter(document, position);
+	if (triggerPoint === undefined) return undefined;
+	const textLeft = textArray[0];
+	const textRight = textArray[1];
 
 	try {
 		const url = "https://code4me.me/api/v1/prediction/autocomplete";
-
 		const response = await fetch(url, {
 			method: "POST",
 			body: JSON.stringify(
 				{
-					"leftContext": leftText.substring(-1024),
-					"rightContext": rightText.substring(0, 1024),
+					"leftContext": textLeft,
+					"rightContext": textRight,
 					"triggerPoint": triggerPoint,
 					"language": "python",
 					"ide": "vsc"
@@ -112,7 +143,7 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 				'Authorization': 'Bearer ' + codeFillUuid
 			}
 		});
-		
+
 		if (!response.ok) {
 			console.error("Response status not OK! Status: ", response.status);
 			return undefined;
@@ -125,9 +156,13 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 		}
 
 		const json = await response.json();
-		
+
 		if (!Object.prototype.hasOwnProperty.call(json, 'predictions')) {
-			console.error("Completion field not found in response!");
+			console.error("Predictions field not found in response!");
+			return undefined;
+		}
+		if (!Object.prototype.hasOwnProperty.call(json, 'verifyToken')) {
+			console.error("VerifyToken field not found in response!");
 			return undefined;
 		}
 		return json;
@@ -140,6 +175,13 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 export function deactivate() { }
 
+/**
+ * Tracks the inserted completion and sends the possibly changed completion after a timeout.
+ * @param position cursor position.
+ * @param completion the completion provided by the server.
+ * @param completionToken the token of the completion provided by the server.
+ * @param apiKey the identifier of the user.
+ */
 function verifyInsertion(position: vscode.Position, completion: string, completionToken: string, apiKey: string) {
 	const editor = vscode.window.activeTextEditor;
 	const document = editor!.document;
@@ -147,6 +189,7 @@ function verifyInsertion(position: vscode.Position, completion: string, completi
 	let lineNumber = position.line;
 	const originalOffset = position.character;
 	let characterOffset = originalOffset;
+
 	const listener = vscode.workspace.onDidChangeTextDocument(event => {
 		if (vscode.window.activeTextEditor == undefined) return;
 		if (vscode.window.activeTextEditor.document.fileName !== documentName) return;
@@ -189,13 +232,13 @@ function verifyInsertion(position: vscode.Position, completion: string, completi
 		listener.dispose();
 		const lineText = editor?.document.lineAt(lineNumber).text;
 
-		fetch("https://code4me.me/api/v1/prediction/verify", {
+		const response = await fetch("https://code4me.me/api/v1/prediction/verify", {
 			method: 'POST',
 			body: JSON.stringify(
 				{
 					"verifyToken": completionToken,
 					"chosenPrediction": completion,
-					"line": lineText?.substring(characterOffset).trim
+					"groundTruth": lineText?.substring(characterOffset).trim()
 				}
 			),
 			headers: {
@@ -203,11 +246,10 @@ function verifyInsertion(position: vscode.Position, completion: string, completi
 				'Authorization': 'Bearer ' + apiKey
 			}
 		});
-	}, 30000);
-}
 
-function getTriggerPoint(lastWord: string | undefined, character: string) {
-	if (lastWord == undefined) return null;
-	if (character == " ") return lastWord;
-	return character.trim();
+		if (!response.ok) {
+			console.error("Response status not OK! Status: ", response.status);
+			return undefined;
+		}
+	}, 5000);
 }
