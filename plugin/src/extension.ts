@@ -8,63 +8,7 @@ import { ExtensionContext } from 'vscode';
 import rand from 'csprng';
 import fetch from 'node-fetch';
 
-type RemoveLast<T extends readonly unknown[]> = T extends readonly []
-	? []
-	: T extends readonly [unknown]
-	? []
-	: T extends readonly [infer H, ...infer T]
-	? readonly [H, ...RemoveLast<T>]
-	: never;
-
-function removeLast<T extends readonly unknown[]>(arr: T): RemoveLast<T> {
-	return arr.slice(0, -1) as RemoveLast<T>;
-}
-
-function debounce<T extends readonly unknown[], R>(fn: (...args: T) => R, cancelReturnValue: R, ms: number): (...args: T) => Promise<Awaited<R>> {
-	let clearTimer: () => void = () => undefined;
-	return (...args) => new Promise(resolve => {
-		clearTimer();
-
-		const timer = setTimeout(() => {
-			resolve(fn(...args) as Awaited<R>);
-			clearTimer = () => undefined;
-		}, ms);
-
-		clearTimer = () => {
-			clearTimeout(timer);
-			resolve(cancelReturnValue as Awaited<R>);
-		};
-	});
-}
-
-async function provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, codeFillUuid: string) {
-	const jsonResponse = await callToAPIAndRetrieve(document, position, codeFillUuid);
-	if (!jsonResponse) return undefined;
-	const completion = jsonResponse.completion;
-	if (completion == "") {
-		console.log("empty string");
-		return undefined;
-	}
-	console.log("Completion ", completion);
-
-	const completionToken = jsonResponse.completionToken;
-
-	const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + completion);
-	completionItem.sortText = '0.0000';
-	completionItem.insertText = completion;
-	completionItem.command = {
-		command: 'verifyInsertion',
-		title: 'Verify Insertion',
-		arguments: [position, completion, completionToken, codeFillUuid]
-	};
-
-	return [completionItem];
-}
-
 export function activate(extensionContext: ExtensionContext) {
-
-	console.log("RUNNING");
-
 	if (!extensionContext.globalState.get('codefill-uuid')) {
 		extensionContext.globalState.update('codefill-uuid', rand(128, 16));
 	}
@@ -73,10 +17,28 @@ export function activate(extensionContext: ExtensionContext) {
 
 	extensionContext.subscriptions.push(vscode.commands.registerCommand('verifyInsertion', verifyInsertion));
 
-	const codeForMeCompletionProvider = extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
-		provideCompletionItems: debounce((...args) => provideCompletionItems(...removeLast(args), codeFillUuid), undefined, 350)
+	extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
+		async provideCompletionItems(document, position, token, context) {
+			const jsonResponse = await callToAPIAndRetrieve(document, position, codeFillUuid);
+			if (!jsonResponse) return undefined;
+
+			const listPredictionItems = jsonResponse.predictions;
+			const completionToken = jsonResponse.verifyToken;
+			if (listPredictionItems.length == 0 || !completionToken) return undefined;
+			
+			return listPredictionItems.map((prediction: string) => {
+				const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + prediction);
+				completionItem.sortText = '0.0000';
+				completionItem.insertText = prediction;
+				completionItem.command = {
+					command: 'verifyInsertion',
+					title: 'Verify Insertion',
+					arguments: [position, prediction, completionToken, codeFillUuid]
+				};
+				return completionItem;
+			});
+		}
 	}, ' ', '.', '+', '-', '*', '/', '%', '*', '<', '>', '&', '|', '^', '=', '!', ';', ',', '[', '(', '{', '~'));
-	// // 	}, '.', '+', '-', '*', '/', '%', '**', '<<', ">>", '&', '|', '^', '==', '!=', ';', ',', '[', '(', '{', '~', '='));
 }
 
 async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vscode.Position, codeFillUuid: string): Promise<any | undefined> {
@@ -97,16 +59,12 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 
 	if (position.character !== line.length) return undefined;
 
-	console.log("sChar = ", singleCharacter);
-	console.log("dChar = ", doubleCharacter);
-
 	const startPosLine = new vscode.Position(position.line, 0);
 	const endPosLine = new vscode.Position(position.line, position.character);
 	const rangeLine = new vscode.Range(startPosLine, endPosLine);
 
 	const lineSplit = document.getText(rangeLine).match(/[\w]+/g);
 	const lastWord = lineSplit?.pop();
-	console.log("lastWord = ", lastWord);
 
 	// DOT, AWAIT, ASSERT, RAISE, DEL, LAMBDA, YIELD, RETURN,
 	// EXCEPT, WHILE, FOR, IF, ELIF, ELSE, GLOBAL, IN, AND, NOT,
@@ -123,30 +81,30 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 	const documentLineCount = document.lineCount - 1;
 	const lastLine = document.lineAt(documentLineCount);
 	const beginDocumentPosition = new vscode.Position(0, 0);
-	const firstHalfRange = new vscode.Range(beginDocumentPosition, position);
+	const leftRange = new vscode.Range(beginDocumentPosition, position);
 
 	const lastLineCharacterOffset = lastLine.range.end.character;
 	const lastLineLineOffset = lastLine.lineNumber;
 	const endDocumentPosition = new vscode.Position(lastLineLineOffset, lastLineCharacterOffset);
-	const secondHalfRange = new vscode.Range(position, endDocumentPosition);
+	const rightRange = new vscode.Range(position, endDocumentPosition);
 
-	const firstHalf = editor.document.getText(firstHalfRange);
-	const secondHalf = editor.document.getText(secondHalfRange);
+	const leftText = editor.document.getText(leftRange);
+	const rightText = editor.document.getText(rightRange);
 
 	const triggerPoint = getTriggerPoint(lastWord, triggerCharacter);
-	console.log("tp: ", triggerPoint);
 
 	try {
-		const url = "https://code4me.me/api/v1/autocomplete";
+		const url = "https://code4me.me/api/v1/prediction/autocomplete";
 
 		const response = await fetch(url, {
 			method: "POST",
 			body: JSON.stringify(
 				{
-					"parts": [firstHalf, secondHalf],
+					"leftContext": leftText.substring(-1024),
+					"rightContext": rightText.substring(0, 1024),
 					"triggerPoint": triggerPoint,
 					"language": "python",
-					"ide": "VSC"
+					"ide": "vsc"
 				}
 			),
 			headers: {
@@ -154,7 +112,7 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 				'Authorization': 'Bearer ' + codeFillUuid
 			}
 		});
-
+		
 		if (!response.ok) {
 			console.error("Response status not OK! Status: ", response.status);
 			return undefined;
@@ -167,7 +125,8 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 		}
 
 		const json = await response.json();
-		if (!Object.prototype.hasOwnProperty.call(json, 'completion')) {
+		
+		if (!Object.prototype.hasOwnProperty.call(json, 'predictions')) {
 			console.error("Completion field not found in response!");
 			return undefined;
 		}
@@ -192,31 +151,30 @@ function verifyInsertion(position: vscode.Position, completion: string, completi
 		if (vscode.window.activeTextEditor == undefined) return;
 		if (vscode.window.activeTextEditor.document.fileName !== documentName) return;
 		for (const changes of event.contentChanges) {
-			console.log(changes);
-
 			const text = changes.text;
 			const startChangedLineNumber = changes.range.start.line;
 			const endChangedLineNumber = changes.range.end.line;
+
 			if (startChangedLineNumber == lineNumber - 1 && endChangedLineNumber == lineNumber && changes.text == '') {
 				lineNumber--;
 				const startLine = document.lineAt(startChangedLineNumber);
 				if (startLine.isEmptyOrWhitespace) characterOffset++;
 				else characterOffset += changes.range.start.character + 1;
 			}
+
 			if (startChangedLineNumber == lineNumber) {
 				if (changes.range.end.character < characterOffset + 1) {
 					if (changes.text === '') {
 						characterOffset -= changes.rangeLength;
 					} if (changes.text.includes('\n')) {
-						console.log("idk", );
 						characterOffset = originalOffset;
-						lineNumber += (text.match(/\n/g) || []).length;
+						lineNumber += (text.match(/\n/g) ?? []).length;
 					} else {
 						characterOffset += changes.text.length;
 					}
 				}
 			} else if (lineNumber == 0 || startChangedLineNumber < lineNumber) {
-				lineNumber += (text.match(/\n/g) || []).length;
+				lineNumber += (text.match(/\n/g) ?? []).length;
 			}
 
 			if (changes.range.end.line <= lineNumber) {
@@ -225,35 +183,18 @@ function verifyInsertion(position: vscode.Position, completion: string, completi
 				}
 			}
 		}
-
-		const editor = vscode.window.activeTextEditor;
-
-		if (!editor) return undefined;
-
-		console.log("line = ", editor.document.lineAt(lineNumber).text);
-		console.log("Line loc = ", lineNumber);
-		const startPos = new vscode.Position(lineNumber, characterOffset);
-		const endPos = new vscode.Position(lineNumber, characterOffset + 1);
-		const range = new vscode.Range(startPos, endPos);
-		const character = document.getText(range);
-		console.log("Char = ", character);
-		console.log("Char loc = ", characterOffset);
 	});
-
-
 
 	setTimeout(async () => {
 		listener.dispose();
-		console.log("send");
 		const lineText = editor?.document.lineAt(lineNumber).text;
-		console.log("sent:", lineText?.substring(characterOffset));
 
-		fetch("https://code4me.me/api/v1/completion", {
+		fetch("https://code4me.me/api/v1/prediction/verify", {
 			method: 'POST',
 			body: JSON.stringify(
 				{
-					"completionToken": completionToken,
-					"completion": completion,
+					"verifyToken": completionToken,
+					"chosenPrediction": completion,
 					"line": lineText?.substring(characterOffset).trim
 				}
 			),
@@ -262,11 +203,11 @@ function verifyInsertion(position: vscode.Position, completion: string, completi
 				'Authorization': 'Bearer ' + apiKey
 			}
 		});
-	}, 15000);
+	}, 30000);
 }
 
 function getTriggerPoint(lastWord: string | undefined, character: string) {
-	if (lastWord == undefined) return undefined;
+	if (lastWord == undefined) return null;
 	if (character == " ") return lastWord;
 	return character.trim();
 }
