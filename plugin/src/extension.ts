@@ -119,7 +119,7 @@ function splitTextAtCursor(nCharacters: number, position: vscode.Position): stri
 }
 
 async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vscode.Position, codeFillUuid: string): Promise<any | undefined> {
-	const textArray = splitTextAtCursor(1024, position);
+	const textArray = splitTextAtCursor(2048, position);
 	const triggerPoint = getTriggerCharacter(document, position);
 	if (triggerPoint === undefined) return undefined;
 	const textLeft = textArray[0];
