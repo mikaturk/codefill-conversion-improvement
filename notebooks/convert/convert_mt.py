@@ -18,25 +18,14 @@ import datetime
 
 debug_filenames = False
 THREADS = 20
-MAX_PATHS = 20_000
-times_json = 'times_20k_v2.json'
+MAX_PATHS = -1
+times_json = 'times_all_v2.json'
 
 os.chdir('/mnt/mturk/cf_sample_data/')
-# starts = 'starts.csv'
-# with open(starts,'w') as fd:
-#     fd.write('')
-# finishes = 'finishes.csv'
-# with open(finishes,'w') as fd:
-#     fd.write('')
 
-
-converted_path = './converted_20k_v2/'
+converted_path = './converted_all_v2/'
 if not os.path.exists(converted_path):
     os.makedirs(converted_path)
-
-# processing_path = './processing/'
-# if not os.path.exists(processing_path):
-#     os.makedirs(processing_path)
 
 save_stdout = sys.stdout
 
@@ -48,11 +37,11 @@ def multireplace(string, replacements, ignore_case=False):
     :param bool ignore_case: whether the match should be case insensitive
     :rtype: str
     """
+    if replacements == {}:
+        return string
     # If case insensitive, we need to normalize the old string so that later a replacement
     # can be found. For instance with {"HEY": "gilol"} we should match and find a replacement for "hey",
     # "HEY", "hEy", etc.
-    if replacements == {}:
-        return string
     
     if ignore_case:
         def normalize_old(s):
@@ -458,7 +447,7 @@ def convert_optional(path, converted_path, ):
 
         # convert_new(path, converted_path, tmp_dir)
         convert_new_v2(path, converted_path)
-        
+
         # Uncomment when using convert_new    
         # shutil.rmtree(tmp_dir)
         return (converted_path, get_elapsed_us(b4), "s")
@@ -467,20 +456,30 @@ def convert_optional(path, converted_path, ):
         # shutil.rmtree(tmp_dir)
         return (converted_path, get_elapsed_us(b4), "f")
 
-paths = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
-paths = paths[:MAX_PATHS]
-converted_paths = []
-for path in paths:
-  file_name = path.split("/").pop()
-  converted_paths.append(converted_path + file_name[:file_name.rfind('.')] + ".txt")
-print("CONVERTING {} PYTHON FILES".format(len(paths)))
-converted_paths_opt = Parallel(n_jobs=THREADS)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths))
-with open(times_json,'w') as fd:
-    fd.write(json.dumps(converted_paths_opt))
-    # fd.write('[\n'+',\n'.join(map(lambda x: "[\"{}\",{}]".format(*x),converted_paths_opt))+'\n]')
-converted_paths_filtered = list(filter(lambda x: x[2] == "s", converted_paths_opt))
-sys.stdout = save_stdout
-print("RESULT: {} FILES IN, {} FILES OUT".format(len(converted_paths), len(converted_paths_filtered)))
+def convert_paths(paths):
+    converted_paths_before = []
+    for path in paths:
+        file_name = path.split("/").pop()
+        converted_paths_before.append(converted_path + file_name[:file_name.rfind('.')] + ".txt")
+    print("CONVERTING {} PYTHON FILES".format(len(paths)))
+    converted_paths_opt = Parallel(n_jobs=THREADS)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths_before))
+    with open(times_json,'w') as fd:
+        fd.write(json.dumps(converted_paths_opt))
+    converted_paths_filtered = list(filter(lambda x: x[-1] == "s", converted_paths_opt))
+    sys.stdout = save_stdout
+    print("RESULT: {} FILES IN, {} FILES OUT".format(len(converted_paths_before), len(converted_paths_filtered)))
+    return converted_paths_filtered
+
+start_time = datetime.datetime.now()
+paths_input = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
+if MAX_PATHS > 0:
+    paths_input = paths_input[:MAX_PATHS]
+print("globbing files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+start_time = datetime.datetime.now()
+converted_paths_filtered = convert_paths(paths_input)
+print("converting files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+paths = list(map(lambda x: x[0], converted_paths_filtered))
+converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
 
 # %%
 # lst = convert_n(50)

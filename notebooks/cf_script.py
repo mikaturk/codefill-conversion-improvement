@@ -10,6 +10,7 @@
 # %pip install nlp==0.2.0
 # %pip install datasets
 # %pip install git+https://github.com/huggingface/nlp
+# %pip install sklearn
 
 # transformers version at notebook update --- 2.11.0
 # tokenizers version at notebook update --- 0.8.0rc1
@@ -18,6 +19,8 @@
 # Fetch datasets
 
 # %%
+import datetime
+from io import BytesIO, StringIO
 import os
 import tokenize
 import dis
@@ -29,6 +32,22 @@ import ast
 import torch
 import signal
 from functools import wraps
+from pathlib import Path
+import json
+from joblib import Parallel, delayed
+
+debug_filenames = False
+THREADS = 20
+MAX_PATHS = 2_000
+times_json = 'times_script_2k_CHANGE_THIS.json'
+
+os.chdir('/mnt/mturk/cf_sample_data/')
+
+converted_path = './converted_script_2k_CHANGE_THIS/'
+if not os.path.exists(converted_path):
+    os.makedirs(converted_path)
+
+save_stdout = sys.stdout
 
 def multireplace(string, replacements, ignore_case=False):
     """
@@ -38,6 +57,8 @@ def multireplace(string, replacements, ignore_case=False):
     :param bool ignore_case: whether the match should be case insensitive
     :rtype: str
     """
+    if replacements == {}:
+        return string
     # If case insensitive, we need to normalize the old string so that later a replacement
     # can be found. For instance with {"HEY": "lol"} we should match and find a replacement for "hey",
     # "HEY", "hEy", etc.
@@ -66,6 +87,7 @@ def multireplace(string, replacements, ignore_case=False):
 
 
 def convert(file, output_file):
+    if debug_filenames: print("starting "+output_file, file=save_stdout)
     with open (file, "r") as f:
         text = f.read()  
 
@@ -84,27 +106,23 @@ def convert(file, output_file):
 
     # reomve * from the dictionary (handle from module import * statement)
     replacements.pop('*', None)
-    print('List of modules and libraries to replace:\n', replacements)
+    # print('List of modules and libraries to replace:\n', replacements)
 
-    with open('med.py','w') as f:
-        f.write(multireplace(text, replacements, ignore_case = True))
+    med = multireplace(text, replacements, ignore_case = True)
 
-    file = 'med.py'
-    with open(file,'rb') as f:
-        tokens = list(tokenize.tokenize(f.readline))
+    tokens = tokenize.tokenize(BytesIO(med.encode('utf-8')).readline)
         
     ### extract important data from the output of tokenize package
-    # toks = pd.DataFrame(columns = ['original','type','text', 'line','pos'])
 
     last_line = 0
     last_pos = 0
-    tokss = [] # PERF
-    toks_index = 0 # PERF
+    tokss = []
     for token in tokens:
         
         tok_org = token.string
         tok_text = token.string    
-        tok_type = str(token).split('(')[2].split(')')[0]
+        # tok_type = str(token).split('(')[2].split(')')[0]
+        tok_type = tokenize.tok_name[token.type]
 
         # convert keywords to upper
         if keyword.iskeyword(tok_text):
@@ -129,24 +147,12 @@ def convert(file, output_file):
         tok_pos = last_pos
         last_line = tok_line
         
-        # toks = toks.append({'type':tok_type,
-        #                     'original':tok_org,
-        #                     'text':tok_text,
-        #                     'line':tok_line,
-        #                     'pos':tok_pos},ignore_index=True)
-        # tokss.append(pd.DataFrame({'type':tok_type,
-        #                     'original':tok_org,
-        #                     'text':tok_text,
-        #                     'line':tok_line,
-        #                     'pos':tok_pos}, index=[toks_index]))
         tokss.append({'type':tok_type,
                             'original':tok_org,
                             'text':tok_text,
                             'line':tok_line,
                             'pos':tok_pos})
-        # toks_index += 1 # PERF
 
-    # toks = pd.concat(tokss)
     toks = pd.DataFrame(tokss)
 
     # remove encoding lines and end of file
@@ -156,14 +162,11 @@ def convert(file, output_file):
     toks['doc'] = (toks.text.str.contains('"""') | toks.text.str.contains("'''"))
     toks = toks.loc[~(toks.doc)].drop(['doc'],axis=1)
 
-    toks.head(20)
-
     indent = 0
     last_line = 0
 
     tokss = [] # PERF
 
-    # for index,row in toks.iterrows():
     for row in toks.itertuples():
         if row.type == "INDENT":
             indent +=1
@@ -173,14 +176,6 @@ def convert(file, output_file):
             continue
         if row.line != last_line:
             last_line = row.line
-            # toks = toks.append({'type':'\n'+indent*'\t',
-            #                     'text':'\n'+indent*'\t',
-            #                     'line':row.line,
-            #                     'pos':row.pos-1},ignore_index=True)
-            # tokss.append(pd.DataFrame({'type':'\n'+indent*'\t',
-            #                     'text':'\n'+indent*'\t',
-            #                     'line':row.line,
-            #                     'pos':row.pos-1}, index=[toks_index]))
             tokss.append({'type':'\n'+indent*'\t',
                                 'text':'\n'+indent*'\t',
                                 'line':row.line,
@@ -191,22 +186,17 @@ def convert(file, output_file):
     toks = toks.loc[~((toks.type=='INDENT') | (toks.type=='DEDENT'))]
     toks = toks.sort_values(['line','pos']).reset_index(drop=True)
 
-
     # drop the first row (empty line)
     toks.drop(toks.index[:1], inplace=True)
 
-    toks.head(20)
-
-    with open(file,'r') as f:
-        src = f.read()
-
+    src = text
     stdout_backup = sys.stdout
-    sys.stdout = open('dis.txt','w')
+    dis_result = StringIO()
+    sys.stdout = dis_result
     dis.dis(src)
     sys.stdout = stdout_backup
 
-    with open('dis.txt','r') as f:
-        lines = f.readlines()
+    lines = dis_result.getvalue().split('\n')
 
     # find global variables
     glbls = [].copy()    
@@ -219,21 +209,22 @@ def convert(file, output_file):
             except:
                 clean = [str(line)]+clean
             if 'LOAD_GLOBAL' in clean:
-                print('found a global!')
+                # print('found a global!')
                 glbls.append((int(clean[0]),clean[-1].replace('(','').replace(')','')))
 
     for l,n in glbls:
-        toks.loc[(toks.line==l) & (toks.text==n),'type'] = 'GLOBAL_VARIABLE'
+        line_eq = toks.loc[toks.line==l]
+        line_eq.loc[line_eq.text==n, 'type'] = 'GLOBAL_VARIABLE'
+        
+    # text_imports = ' '.join(list(toks.text)).replace('\n ','\n').replace(' \n','\n').replace('\t ','\t').replace(' . ','.').replace(' (','(')
+    # text_imports = multireplace(text_imports, replacements, ignore_case = True)
 
-    toks .head(10) 
+    # with open('normalized_textual_file.py','w') as f:
+    #     f.write(text_imports)
 
-    text_imports = ' '.join(list(toks.text)).replace('\n ','\n').replace(' \n','\n').replace('\t ','\t').replace(' . ','.').replace(' (','(')
-    text_imports = multireplace(text_imports, replacements, ignore_case = True)
+    
+    toks.loc[toks['text'].isin(['LIBRARY','LIB','ALIAS','MODULE']), 'type'] = toks['text']
 
-    with open('normalized_textual_file.py','w') as f:
-        f.write(text_imports)
-
-    toks.type = toks.apply(lambda x: x['text'] if str(x['text']) in ['LIBRARY','LIB','ALIAS','MODULE'] else x['type'], axis = 1)
     code_converted = ' '.join(list(toks.type)).replace('\n ','\n').replace(' \n','\n').replace('\t ','\t').replace(' . ','.').replace(' (','(')
 
     final_replacements = {'GLOBAL_VARIABLE(':'FUNCTION_CALL(',                      
@@ -245,7 +236,7 @@ def convert(file, output_file):
 
     with open(output_file,'w') as f:
         f.write(code_converted)
-
+    if debug_filenames: print("finished "+output_file, file=save_stdout)
 
 WEIGHT_MATRIX = {
         'NUMBER' : [1.625, 1.25, 1.125],
@@ -259,7 +250,7 @@ output_file = "/tmp/output_file.txt"
 def reranking_layer(outputs, context, tokenizer):
 
   with open(input_file, 'w') as f:
-    f.write(context);
+    f.write(context)
   
   convert(file_path=input_file, output_file=output_file)
   with open(output_file, 'rb') as context:
@@ -267,36 +258,11 @@ def reranking_layer(outputs, context, tokenizer):
     for item in inputs:
         loss_fct = nn.CrossEntropyLoss(weight=torch.tensor(WEIGHT_MATRIX[item[1]]))
 
-
 # %%
-# convert("./sample_data/data/peakfinder.py", "./converted_train.txt")
-
-# %%
-%load_ext line_profiler
-# %lprun -f convert convert("sample_data/data/raw_to_mat.py", "sample_data/converted/raw_to_mat.txt")
-%lprun -f convert convert("sample_data/data/0002_add_new_column_conference.py", "sample_data/converted/0002_add_new_column_conference.txt")
-
-# convert("sample_data/data/raw_to_mat.py", "sample_data/converted/raw_to_mat.txt")
-
-# %%
-from pathlib import Path
-import glob
-def convert_n(n_paths):
-    paths = [str(x) for x in Path(".").glob("./sample_data/data/*.py")]
-    paths = paths[:n_paths]
-    converted_paths = []
-    for path in paths:
-        converted_path = "./sample_data/converted/"+ path.split("/").pop().split(".")[0] + ".txt"
-        try:
-            convert(path, converted_path)
-            converted_paths.append(converted_path)
-        except:
-            pass
-
 # %load_ext line_profiler
-# %lprun -f convert convert("sample_data/data/porndl.py", "sample_data/converted/porndl.txt")
 # %lprun -f convert convert("sample_data/data/raw_to_mat.py", "sample_data/converted/raw_to_mat.txt")
-# %lprun -f convert convert_n(200)
+# %lprun -f convert convert("sample_data/data/0002_add_new_column_conference.py", "sample_data/converted/0002_add_new_column_conference.txt")
+
 
 # %%
 # pretrain dataset
@@ -319,36 +285,63 @@ def convert_n(n_paths):
 
 # %%
 from pathlib import Path
-from transformers import AutoTokenizer,TextDataset,DataCollatorForLanguageModeling
+from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,DataCollatorForLanguageModeling
 import glob
 import random 
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 # %%
-paths = [str(x) for x in Path(".").glob("./sample_data/data/*.py")]
-n_paths = 200
-paths = paths[:n_paths]
-converted_paths = []
-i = 0
-for path in paths:
-  converted_path = "./sample_data/converted/"+ path.split("/").pop().split(".")[0] + ".txt"
-  # print(converted_path)
-  try:
-    convert(path, converted_path)
-    converted_paths.append(converted_path)
-  except:
-    pass
-# converted_paths = ["./sample_data/converted/"+ path.split("/").pop().split(".")[0] + ".txt" for path in paths]
-# paths
-# for (path, conv_path) in zip(paths, converted_paths):
-#     try:
-#       convert(path, conv_path)
-#     except:
-#       pass
+def get_elapsed_us(start):
+    return get_us(start, datetime.datetime.now())
 
-# convert is too sequential, this will not work
-# Parallel(n_jobs=-1)(delayed(convert)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths))
+def get_us(start, end):
+    dt = end - start
+    return dt.seconds * 1e6 + dt.microseconds
+
+
+def convert_optional(path, converted_path):
+    # Uncomment when using convert_new    
+    # tmp_dir = tempfile.mkdtemp()
+
+    try:
+        b4 = datetime.datetime.now()
+
+        # convert_new(path, converted_path, tmp_dir)
+        convert(path, converted_path)
+
+        # Uncomment when using convert_new    
+        # shutil.rmtree(tmp_dir)
+        return (path, converted_path, get_elapsed_us(b4), "s")
+    except:
+        # Uncomment when using convert_new    
+        # shutil.rmtree(tmp_dir)
+        return (path, converted_path, get_elapsed_us(b4), "f")
+
+def convert_paths(paths):
+    converted_paths_before = []
+    for path in paths:
+        file_name = path.split("/").pop()
+        converted_paths_before.append(converted_path + file_name[:file_name.rfind('.')] + ".txt")
+    print("CONVERTING {} PYTHON FILES".format(len(paths)))
+    converted_paths_opt = Parallel(n_jobs=THREADS)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths_before))
+    with open(times_json,'w') as fd:
+        fd.write(json.dumps(converted_paths_opt))
+        # fd.write('[\n'+',\n'.join(map(lambda x: "[\"{}\",{}]".format(*x),converted_paths_opt))+'\n]')
+    converted_paths_filtered = list(filter(lambda x: x[-1] == "s", converted_paths_opt))
+    sys.stdout = save_stdout
+    print("RESULT: {} FILES IN, {} FILES OUT".format(len(converted_paths_before), len(converted_paths_filtered)))
+    return converted_paths_filtered
+
+start_time = datetime.datetime.now()
+paths_input = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
+paths_input = paths_input[:MAX_PATHS]
+print("globbing files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+start_time = datetime.datetime.now()
+converted_paths_filtered = convert_paths(paths_input)
+print("converting files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+paths = list(map(lambda x: x[0], converted_paths_filtered))
+converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
 
 with open("./train.txt", "wb") as train_outfile:
   with open("./test.txt", "wb") as test_outfile:
@@ -390,9 +383,11 @@ def load_dataset(train_path,test_path,tokenizer):
 
 train_dataset,test_dataset,data_collator = load_dataset("./train.txt", "./test.txt",tokenizer)
 converted_train_dataset, converted_test_dataset, converted_datacollator = load_dataset("./converted_train.txt", "./converted_test.txt",tokenizer)
-#pretrain_raw_files = glob.glob("./pretrain_dataset" + '/**/*.py', recursive=True)
-#pretrain_converted_files = glob.glob("./pretrain_converted_dataset" + '/**/*.py', recursive=True)
+pretrain_raw_files = glob.glob("./pretrain_dataset" + '/**/*.py', recursive=True)
+pretrain_converted_files = glob.glob("./pretrain_converted_dataset" + '/**/*.py', recursive=True)
 print("converted!")
+
+# raise Exception("hi")
 # %%
 # tokenizer("for i in range(10)")["input_ids"]
 
@@ -647,11 +642,14 @@ class MultitaskTrainer(transformers.Trainer):
             for task_name, task_dataset in self.train_dataset.items()
         })
     
-    def train(self, model_name):
-    # def train(self):
+    # def train(self, model_name):
+    # def train(self, pretrained_path):
+    def train(self):
       config = transformers.AutoConfig.from_pretrained("gpt2")
       model = transformers.AutoModelWithLMHead.from_pretrained("gpt2", config=config)
-      trainer = Trainer(
+    #   config = transformers.AutoConfig.from_pretrained(pretrained_path)
+    #   model = transformers.AutoModelWithLMHead.from_pretrained(pretrained_path, config=config)
+      self.trainer = Trainer(
         model=model,
         args=self.args,
         # transformers.TrainingArguments(
@@ -667,8 +665,11 @@ class MultitaskTrainer(transformers.Trainer):
         data_collator=data_collator,
         train_dataset=train_dataset,
       )
-      trainer.train(model_name)
-    #   trainer.train()
+    #   self.trainer.train(model_name)
+      self.trainer.train()
+
+    def prediction_loop(self):
+        return self.trainer.predict()
 
     def compute_loss2(self, model, inputs, return_outputs=True):
         labels = inputs.get("labels")
@@ -680,38 +681,31 @@ class MultitaskTrainer(transformers.Trainer):
         loss_fct = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 2.0, 3.0]))
         loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
-
-# %%
-
-
+    
 # %%
 trainer = MultitaskTrainer(
     model=multitask_model,
     args=transformers.TrainingArguments(
         output_dir="./models/multitask_model",
-        # overwrite_output_dir=True,
-        overwrite_output_dir=False,
+        overwrite_output_dir=True,
+        # overwrite_output_dir=False,
         learning_rate=1e-5,
-        # do_train=True,
-        do_train=False,
+        do_train=True,
+        # do_train=False,
         num_train_epochs=100,
         # Adjust batch size if this doesn't fit on the Colab GPU
-        per_device_train_batch_size=6,  
+        per_device_train_batch_size=8,  
         save_steps=3000,
         eval_accumulation_steps=8
     ),
     data_collator=data_collator,
 )
-# trainer.train()
-trainer.train('./models_6g_acc/multitask_model/checkpoint-12000')
+trainer.train()
+# trainer.train('/mnt/mturk/pytorch_model.bin')
 
 # %%
 
-import gc
-
-gc.collect()
-
-torch.cuda.empty_cache()
+# torch.cuda.empty_cache()
 # %%
 preds_dict = {}
 for task_name in ["token", "token_type", "line"]:
