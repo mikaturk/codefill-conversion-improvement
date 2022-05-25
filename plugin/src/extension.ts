@@ -74,34 +74,8 @@ export function activate(extensionContext: ExtensionContext) {
 	extensionContext.subscriptions.push(vscode.commands.registerCommand('verifyInsertion', verifyInsertion));
 
 	const codeForMeCompletionProvider = extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
-		async provideCompletionItems(document, position, token, context) {
-			const jsonResponse = await callToAPIAndRetrieve(document, position, codeFillUuid);
-			if (!jsonResponse) return undefined;
-			const completion = jsonResponse.completion;
-			if (completion == "") {
-				console.log("empty string");
-				return undefined;
-			}
-			console.log("Completion ", completion);
-
-			const completionToken = jsonResponse.completionToken;
-			const apiKey = extensionContext.globalState.get('codefill-uuid');
-
-			const completionItem = new vscode.CompletionItem('\u276E\uff0f\u276f: ' + completion);
-			completionItem.sortText = '0.0000';
-			completionItem.insertText = completion;
-			completionItem.command = {
-				command: 'verifyInsertion',
-				title: 'Verify Insertion',
-				arguments: [position, completion, context, completionToken, apiKey]
-			};
-			
-			return [completionItem];
-		}
+		provideCompletionItems: debounce((...args) => provideCompletionItems(...removeLast(args), codeFillUuid), undefined, 350)
 	}, ' ', '.', '+', '-', '*', '/', '%', '*', '<', '>', '&', '|', '^', '=', '!', ';', ',', '[', '(', '{', '~'));
-	// const codeForMeCompletionProvider = extensionContext.subscriptions.push(vscode.languages.registerCompletionItemProvider('python', {
-	// 	provideCompletionItems: debounce((...args) => provideCompletionItems(...removeLast(args), codeFillUuid), undefined, 300)
-	// }, ' ', '.', '+', '-', '*', '/', '%', '*', '<', '>', '&', '|', '^', '=', '!', ';', ',', '[', '(', '{', '~'));
 	// // 	}, '.', '+', '-', '*', '/', '%', '**', '<<', ">>", '&', '|', '^', '==', '!=', ';', ',', '[', '(', '{', '~', '='));
 }
 
@@ -117,7 +91,7 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 	const rangeSingleCharacter = new vscode.Range(startSingleCharacterPos, endPos);
 
 	const singleCharacter = document.getText(rangeSingleCharacter);
-	const doubleCharacter = document.getText(rangeDoubleCharacter);
+	const doubleCharacter = document.getText(rangeDoubleCharacter).trim();
 
 	const line = document.lineAt(position.line).text;
 
@@ -138,12 +112,12 @@ async function callToAPIAndRetrieve(document: vscode.TextDocument, position: vsc
 	// EXCEPT, WHILE, FOR, IF, ELIF, ELSE, GLOBAL, IN, AND, NOT,
 	// OR, IS, BINOP, WITH
 
-	const allowedCharacters = ['.', '+ ', '- ', '* ', '/ ', '% ', '**', '<<', '>>', '& ', '| ', '^ ', '==', '!=', '; ', ', ', '[ ', '( ', '{ ', '~ ', '= '];
+	const allowedCharacters = ['.', '+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^', '+=', '-=', '==', '!=', ';', ',', '[', '(', '{', '~', '='];
 
-	let triggerCharacter = singleCharacter;
-	if (singleCharacter !== '.') {
-		triggerCharacter = doubleCharacter;
-		if (!allowedCharacters.includes(doubleCharacter)) return undefined;
+	let triggerCharacter = doubleCharacter;
+	if (!allowedCharacters.includes(doubleCharacter)) {
+		triggerCharacter = singleCharacter;
+		if (!allowedCharacters.includes(singleCharacter)) return undefined;
 	}
 
 	const documentLineCount = document.lineCount - 1;
@@ -210,33 +184,44 @@ export function deactivate() { }
 function verifyInsertion(position: vscode.Position, completion: string, completionToken: string, apiKey: string) {
 	const editor = vscode.window.activeTextEditor;
 	const document = editor!.document;
+	const documentName = document.fileName;
 	let lineNumber = position.line;
-	let characterOffset = position.character;
-
+	const originalOffset = position.character;
+	let characterOffset = originalOffset;
 	const listener = vscode.workspace.onDidChangeTextDocument(event => {
+		if (vscode.window.activeTextEditor == undefined) return;
+		if (vscode.window.activeTextEditor.document.fileName !== documentName) return;
 		for (const changes of event.contentChanges) {
 			console.log(changes);
 
 			const text = changes.text;
-			const changedLineNumber = changes.range.start.line;
-			if (changedLineNumber == lineNumber) {
+			const startChangedLineNumber = changes.range.start.line;
+			const endChangedLineNumber = changes.range.end.line;
+			if (startChangedLineNumber == lineNumber - 1 && endChangedLineNumber == lineNumber && changes.text == '') {
+				lineNumber--;
+				const startLine = document.lineAt(startChangedLineNumber);
+				if (startLine.isEmptyOrWhitespace) characterOffset++;
+				else characterOffset += changes.range.start.character + 1;
+			}
+			if (startChangedLineNumber == lineNumber) {
 				if (changes.range.end.character < characterOffset + 1) {
 					if (changes.text === '') {
 						characterOffset -= changes.rangeLength;
 					} if (changes.text.includes('\n')) {
-						characterOffset = 0;
+						console.log("idk", );
+						characterOffset = originalOffset;
 						lineNumber += (text.match(/\n/g) || []).length;
 					} else {
 						characterOffset += changes.text.length;
 					}
 				}
-			} else if (lineNumber == 0 || changedLineNumber < lineNumber) {
+			} else if (lineNumber == 0 || startChangedLineNumber < lineNumber) {
 				lineNumber += (text.match(/\n/g) || []).length;
 			}
 
-			if (changes.range.end.line < lineNumber) {
+			if (changes.range.end.line <= lineNumber) {
 				if (changes.text === '') {
-					lineNumber -= changes.range.end.line - changedLineNumber;
+					lineNumber -= changes.range.end.line - startChangedLineNumber;
 				}
 			}
 		}
@@ -277,7 +262,7 @@ function verifyInsertion(position: vscode.Position, completion: string, completi
 				'Authorization': 'Bearer ' + apiKey
 			}
 		});
-	}, 5000);
+	}, 15000);
 }
 
 function getTriggerPoint(lastWord: string | undefined, character: string) {
