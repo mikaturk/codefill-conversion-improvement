@@ -1,9 +1,7 @@
-# IntelliJ Platform Code4Me Plugin
+# Code4Me - VSC Extension
 
 <!-- Plugin description -->
-**Code4Me** is a plugin that autocompletes code in a TU Delft research project for the CSE3000 course given in the Computer Science and Engineering bachelor.
-
-The plugin has triggerpoints on which it will suggest autocompletions, and a keybind which will trigger the autocompletion wherever you want.
+**Code4Me** provides language model based code completion. Code4Me predicts statement (line) completion and is seemlessly integrated with Visual Studio Code's code completion. The code suggestions from Code4Me are denoted with a unicode "&#10094; &#65295; &#10095;" representation of the logo.
 
 For more information, visit the [Code4Me](https://code4me.me) website.
 <!-- Plugin description end -->

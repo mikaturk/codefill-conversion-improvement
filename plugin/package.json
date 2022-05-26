@@ -1,8 +1,8 @@
 {
-	"name": "codefill-plugin",
+	"name": "code4me-plugin",
 	"displayName": "CodeFill IDE AutoCompletion",
 	"description": "For all your experimental code completion.",
-	"author": "TU Delft Research Project",
+	"author": "Code4Me",
 	"license": "Apache 2.0",
 	"version": "1.0.0",
 	"repository": {
@@ -10,31 +10,15 @@
 		"url": "https://github.com/Microsoft/vscode-extension-samples"
 	},
 	"icon": "pluginIcon.png",
-	"publisher": "TU Delft Research Project",
+	"publisher": "Code4Me",
 	"engines": {
 		"vscode": "^1.47.0"
 	},
 	"activationEvents": [
-		"onCommand:codefill-plugin.generateAutoComplete",
 		"editor.action.triggerSuggest",
 		"onLanguage:python"
 	],
 	"main": "./out/extension.js",
-	"contributes": {
-		"commands": [
-			{
-				"command": "codefill-plugin.generateAutoComplete",
-				"title": "CodeFill: Generate Autocomplete"
-			}
-		],
-		"keybindings": [
-			{
-				"command": "codefill-plugin.generateAutoComplete",
-				"key": "ctrl+alt+c",
-				"mac": "ctrl+cmd+c"
-			}
-		]
-	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -p ./",
