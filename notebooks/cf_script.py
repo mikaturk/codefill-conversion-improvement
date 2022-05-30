@@ -36,14 +36,19 @@ from pathlib import Path
 import json
 from joblib import Parallel, delayed
 
-debug_filenames = False
+# os.environ["CUDA_VISIBLE_DEVICES"]="1"
+
+DEBUG_FILENAMES = False
+PERFORM_CONVERSION = False
+PERFORM_DATASET_COPY = False
 THREADS = 20
-MAX_PATHS = 2_000
-times_json = 'times_script_2k_CHANGE_THIS.json'
+MAX_PATHS = 10_000
+TIMES_JSON = 'times_script_10k.json'
+PY_SOURCEFILES_LOCATION = './deduplicated_code_fill_pretrain/'
 
 os.chdir('/mnt/mturk/cf_sample_data/')
 
-converted_path = './converted_script_2k_CHANGE_THIS/'
+converted_path = './converted_all_lt_1mb/'
 if not os.path.exists(converted_path):
     os.makedirs(converted_path)
 
@@ -87,7 +92,7 @@ def multireplace(string, replacements, ignore_case=False):
 
 
 def convert(file, output_file):
-    if debug_filenames: print("starting "+output_file, file=save_stdout)
+    if DEBUG_FILENAMES: print("starting "+output_file, file=save_stdout)
     with open (file, "r") as f:
         text = f.read()  
 
@@ -236,7 +241,7 @@ def convert(file, output_file):
 
     with open(output_file,'w') as f:
         f.write(code_converted)
-    if debug_filenames: print("finished "+output_file, file=save_stdout)
+    if DEBUG_FILENAMES: print("finished "+output_file, file=save_stdout)
 
 WEIGHT_MATRIX = {
         'NUMBER' : [1.625, 1.25, 1.125],
@@ -285,7 +290,7 @@ def reranking_layer(outputs, context, tokenizer):
 
 # %%
 from pathlib import Path
-from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,DataCollatorForLanguageModeling
+from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,DataCollatorForLanguageModeling, trainer_utils
 import glob
 import random 
 
@@ -322,10 +327,17 @@ def convert_paths(paths):
     converted_paths_before = []
     for path in paths:
         file_name = path.split("/").pop()
-        converted_paths_before.append(converted_path + file_name[:file_name.rfind('.')] + ".txt")
+        # Enable this option for:
+        # hello.py -> hello.txt
+        # base_name = file_name[:file_name.rfind('.')]
+
+        # Enable this option for:
+        # hello.py -> hello.py.txt
+        base_name = file_name
+        converted_paths_before.append(converted_path + base_name + ".txt")
     print("CONVERTING {} PYTHON FILES".format(len(paths)))
     converted_paths_opt = Parallel(n_jobs=THREADS)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths_before))
-    with open(times_json,'w') as fd:
+    with open(TIMES_JSON,'w') as fd:
         fd.write(json.dumps(converted_paths_opt))
         # fd.write('[\n'+',\n'.join(map(lambda x: "[\"{}\",{}]".format(*x),converted_paths_opt))+'\n]')
     converted_paths_filtered = list(filter(lambda x: x[-1] == "s", converted_paths_opt))
@@ -333,36 +345,58 @@ def convert_paths(paths):
     print("RESULT: {} FILES IN, {} FILES OUT".format(len(converted_paths_before), len(converted_paths_filtered)))
     return converted_paths_filtered
 
-start_time = datetime.datetime.now()
-paths_input = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
-paths_input = paths_input[:MAX_PATHS]
-print("globbing files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
-start_time = datetime.datetime.now()
-converted_paths_filtered = convert_paths(paths_input)
-print("converting files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
-paths = list(map(lambda x: x[0], converted_paths_filtered))
-converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
+if PERFORM_CONVERSION:
+    print("starting conversion")
+    start_time = datetime.datetime.now()
+    paths_input = [str(x) for x in Path(PY_SOURCEFILES_LOCATION).glob("*.py*")]
+    paths_input = paths_input[:MAX_PATHS]
+    print("globbing files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    start_time = datetime.datetime.now()
+    converted_paths_filtered = convert_paths(paths_input)
+    print("converting files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    paths = list(map(lambda x: x[0], converted_paths_filtered))
+    converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
+else:
+    print("skipping conversion")
+    start_time = datetime.datetime.now()
+    converted_paths = [str(x) for x in Path(converted_path).glob("*.txt")]
+    print("globbing converted files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    paths = [PY_SOURCEFILES_LOCATION + conv_path[conv_path.rfind('/')+1:-4] for conv_path in converted_paths]
 
-with open("./train.txt", "wb") as train_outfile:
-  with open("./test.txt", "wb") as test_outfile:
-    for f in paths:
-        choice = random.random()
-        with open(f, "rb") as infile:
-            if choice > 0.1:
-              train_outfile.write(infile.read())
-            else:
-              test_outfile.write(infile.read())
 
-with open("./converted_train.txt", "wb") as train_outfile:
-  with open("./converted_test.txt", "wb") as test_outfile:
-    for f in converted_paths:
-        choice = random.random()
-        with open(f, "rb") as infile:
-            if choice > 0.1:
-              train_outfile.write(infile.read())
-            else:
-              test_outfile.write(infile.read())
+print("converted file amount: " + str(len(converted_paths)))
 
+if PERFORM_DATASET_COPY:
+    start_time = datetime.datetime.now()
+    print("starting the writing of source files")
+
+    with open("./train.txt", "wb") as train_outfile:
+        with open("./test.txt", "wb") as test_outfile:
+            for f in paths:
+                choice = random.random()
+                with open(f, "rb") as infile:
+                    if choice > 0.1:
+                        train_outfile.write(infile.read())
+                    else:
+                        test_outfile.write(infile.read())
+
+    # TODO: Parallelize these, they are independent and take a lot of time 
+    # (provided the disks can do more I/O at a higher queue depth)
+    print("the writing of source files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    start_time = datetime.datetime.now()
+    print("starting the writing of converted files")
+
+    with open("./converted_train.txt", "wb") as train_outfile:
+        with open("./converted_test.txt", "wb") as test_outfile:
+            for f in converted_paths:
+                choice = random.random()
+                with open(f, "rb") as infile:
+                    if choice > 0.1:
+                        train_outfile.write(infile.read())
+                    else:
+                        test_outfile.write(infile.read())
+
+    print("the writing of converted files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
 
 # %%
 def load_dataset(train_path,test_path,tokenizer):
@@ -383,11 +417,11 @@ def load_dataset(train_path,test_path,tokenizer):
 
 train_dataset,test_dataset,data_collator = load_dataset("./train.txt", "./test.txt",tokenizer)
 converted_train_dataset, converted_test_dataset, converted_datacollator = load_dataset("./converted_train.txt", "./converted_test.txt",tokenizer)
-pretrain_raw_files = glob.glob("./pretrain_dataset" + '/**/*.py', recursive=True)
-pretrain_converted_files = glob.glob("./pretrain_converted_dataset" + '/**/*.py', recursive=True)
-print("converted!")
+# TODO: Ask what these lines are for.
+# pretrain_raw_files = glob.glob("./pretrain_dataset" + '/**/*.py', recursive=True)
+# pretrain_converted_files = glob.glob("./pretrain_converted_dataset" + '/**/*.py', recursive=True)
 
-# raise Exception("hi")
+# raise Exception("stopping the script...")
 # %%
 # tokenizer("for i in range(10)")["input_ids"]
 
@@ -642,13 +676,9 @@ class MultitaskTrainer(transformers.Trainer):
             for task_name, task_dataset in self.train_dataset.items()
         })
     
-    # def train(self, model_name):
-    # def train(self, pretrained_path):
-    def train(self):
+    def train(self, *args):
       config = transformers.AutoConfig.from_pretrained("gpt2")
       model = transformers.AutoModelWithLMHead.from_pretrained("gpt2", config=config)
-    #   config = transformers.AutoConfig.from_pretrained(pretrained_path)
-    #   model = transformers.AutoModelWithLMHead.from_pretrained(pretrained_path, config=config)
       self.trainer = Trainer(
         model=model,
         args=self.args,
@@ -665,11 +695,10 @@ class MultitaskTrainer(transformers.Trainer):
         data_collator=data_collator,
         train_dataset=train_dataset,
       )
-    #   self.trainer.train(model_name)
-      self.trainer.train()
+      self.trainer.train(*args)
 
-    def prediction_loop(self):
-        return self.trainer.predict()
+    # def prediction_loop(self, dataset):
+    #     return self.trainer.predict(dataset)
 
     def compute_loss2(self, model, inputs, return_outputs=True):
         labels = inputs.get("labels")
@@ -683,32 +712,43 @@ class MultitaskTrainer(transformers.Trainer):
         return (loss, outputs) if return_outputs else loss
     
 # %%
+DO_TRAIN = True
+
 trainer = MultitaskTrainer(
     model=multitask_model,
     args=transformers.TrainingArguments(
-        output_dir="./models/multitask_model",
-        overwrite_output_dir=True,
-        # overwrite_output_dir=False,
+        output_dir="./models/multitask_model_millionplus",
+        overwrite_output_dir=DO_TRAIN,
         learning_rate=1e-5,
-        do_train=True,
-        # do_train=False,
+        do_train=DO_TRAIN,
         num_train_epochs=100,
         # Adjust batch size if this doesn't fit on the Colab GPU
-        per_device_train_batch_size=8,  
-        save_steps=3000,
+        per_device_train_batch_size=16,  
+        save_steps=110000,
+        fp16=True,
         eval_accumulation_steps=8
     ),
     data_collator=data_collator,
 )
-trainer.train()
-# trainer.train('/mnt/mturk/pytorch_model.bin')
+
+if DO_TRAIN:
+    trainer.train()
+else:
+    trainer.train('./models/multitask_model_b5/checkpoint-21000/')
+
+# %%
+# From: https://discuss.huggingface.co/t/using-trainer-at-inference-time/9378/5
+model_to_save = trainer.model.module if hasattr(trainer.model, 'module') else trainer.model  # Take care of distributed/parallel training
+model_to_save.save_pretrained('./pretrained_models/one-point-six-million')
+
 
 # %%
 
 # torch.cuda.empty_cache()
 # %%
-preds_dict = {}
+preds_dict: Dict[str, trainer_utils.PredictionOutput] = {}
 for task_name in ["token", "token_type", "line"]:
+    print("predicting: " + task_name)
     eval_dataloader = DataLoaderWithTaskname(
         task_name,
         trainer.get_eval_dataloader(eval_dataset=dataset_dict[task_name])
@@ -718,6 +758,7 @@ for task_name in ["token", "token_type", "line"]:
         eval_dataloader, 
         description=f"Validation: {task_name}",
     )
+    # preds_dict[task_name] = trainer.prediction_loop(dataset_dict[task_name])
 
 
 print(preds_dict)
@@ -735,7 +776,9 @@ for task_name in ["token", "token_type", "line"]:
   mrr_dict[task_name] = label_ranking_average_precision_score(preds_dict[task_name].predictions.flatten(),
     preds_dict[task_name].label_ids)
   
-
-
+print("accuracy_dict:")
+print(accuracy_dict)
+print("mrr_dict:")
+print(mrr_dict)
 
 # %%

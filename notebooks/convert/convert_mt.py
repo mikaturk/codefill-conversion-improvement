@@ -9,6 +9,7 @@ import dis
 import sys
 import re
 import keyword
+import traceback
 import pandas as pd
 import ast
 import torch
@@ -19,11 +20,13 @@ import datetime
 debug_filenames = False
 THREADS = 20
 MAX_PATHS = -1
-times_json = 'times_all_v2.json'
+# 1 Megabyte (per file)
+MAX_FILE_SIZE = 1_000_000
+times_json = 'times_all_lt_1mb.json'
 
 os.chdir('/mnt/mturk/cf_sample_data/')
 
-converted_path = './converted_all_v2/'
+converted_path = './converted_all_lt_1mb/'
 if not os.path.exists(converted_path):
     os.makedirs(converted_path)
 
@@ -410,20 +413,6 @@ def convert_new_v2(file, output_file):
 
 # %%
 
-# def convert_n(n_paths):
-#     paths = [str(x) for x in Path(".").glob("./sample_data/data/*.py")]
-#     paths = list(filter(lambda x: len(x.split("."))>3,paths))
-#     paths = paths[:n_paths]
-#     converted_paths = []
-#     for path in paths:
-#         file_name = path.split("/").pop()
-#         converted_path = "./sample_data/converted/" + file_name[:file_name.rfind('.')] + ".txt"
-#         converted_paths.append(convert_optional(path, converted_path))
-#     return converted_paths
-
-# %%
-
-
 from pathlib import Path
 import glob
 import json
@@ -450,17 +439,26 @@ def convert_optional(path, converted_path, ):
 
         # Uncomment when using convert_new    
         # shutil.rmtree(tmp_dir)
-        return (converted_path, get_elapsed_us(b4), "s")
-    except:
+        return (converted_path, get_elapsed_us(b4), "s", None)
+    except Exception as e:
         # Uncomment when using convert_new    
         # shutil.rmtree(tmp_dir)
-        return (converted_path, get_elapsed_us(b4), "f")
+        exc_info = sys.exc_info()
+        error_str = ''.join(traceback.format_exception(*exc_info))
+        return (converted_path, get_elapsed_us(b4), "f", error_str)
 
 def convert_paths(paths):
     converted_paths_before = []
     for path in paths:
         file_name = path.split("/").pop()
-        converted_paths_before.append(converted_path + file_name[:file_name.rfind('.')] + ".txt")
+        # Enable this option for:
+        # hello.py -> hello.txt
+        # base_name = file_name[:file_name.rfind('.')]
+
+        # Enable this option for:
+        # hello.py -> hello.py.txt
+        base_name = file_name
+        converted_paths_before.append(converted_path + base_name + ".txt")
     print("CONVERTING {} PYTHON FILES".format(len(paths)))
     converted_paths_opt = Parallel(n_jobs=THREADS)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths_before))
     with open(times_json,'w') as fd:
@@ -471,28 +469,14 @@ def convert_paths(paths):
     return converted_paths_filtered
 
 start_time = datetime.datetime.now()
-paths_input = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py")]
+paths_input = [str(x) for x in Path(".").glob("./deduplicated_code_fill_pretrain/*.py*")]
 if MAX_PATHS > 0:
     paths_input = paths_input[:MAX_PATHS]
+print("PATHS BEFORE FILE SIZE LIMIT: " + str(len(paths_input)))
+paths_input = list(filter(lambda x: os.path.getsize(x) < MAX_FILE_SIZE, paths_input))
 print("globbing files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
 start_time = datetime.datetime.now()
 converted_paths_filtered = convert_paths(paths_input)
 print("converting files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
 paths = list(map(lambda x: x[0], converted_paths_filtered))
 converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
-
-# %%
-# lst = convert_n(50)
-# sys.stdout = save_stdout
-# print(lst)
-# abb = list(filter(bool, lst))
-# print(abb)
-
-
-# %%
-# sys.stdout = save_stdout
-
-# with open('./sample_data/data/raw_to_mat.py') as f:
-#   print(f.read(90))
-# print("HI")
-# %%

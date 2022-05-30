@@ -5,6 +5,14 @@
 **/*_dataset
 **/sample_data
 **/checkpoint-*
+**/*.bin
+**/*.zip
+**/*.csv
+**/*.json
+
+# Testing Data
+notebooks/slowfiles
+notebooks/convert/*.interactive
 
 # Temp Files
 **/cached_*
@@ -17,3 +25,9 @@ notebooks/*.txt
 # that VS Code runs like notebooks
 
 *.ipynb
+
+# cache
+**/__pycache__
+
+# secrets
+**/.env
