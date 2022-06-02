@@ -35,6 +35,12 @@ from functools import wraps
 from pathlib import Path
 import json
 from joblib import Parallel, delayed
+from pathlib import Path
+from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,DataCollatorForLanguageModeling, trainer_utils
+import glob
+import random
+from cf_shared.utils import get_source_file_names_from_converted_folder, get_elapsed_us, print_elapsed_seconds
+from cf_shared.MultitaskModel import MultitaskModel
 
 # os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
@@ -289,21 +295,10 @@ def reranking_layer(outputs, context, tokenizer):
 # Train a customised python byte-level Byte-pair encoding tokenizer. 
 
 # %%
-from pathlib import Path
-from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,DataCollatorForLanguageModeling, trainer_utils
-import glob
-import random 
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 # %%
-def get_elapsed_us(start):
-    return get_us(start, datetime.datetime.now())
-
-def get_us(start, end):
-    dt = end - start
-    return dt.seconds * 1e6 + dt.microseconds
-
 
 def convert_optional(path, converted_path):
     # Uncomment when using convert_new    
@@ -358,10 +353,7 @@ if PERFORM_CONVERSION:
     converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
 else:
     print("skipping conversion")
-    start_time = datetime.datetime.now()
-    converted_paths = [str(x) for x in Path(converted_path).glob("*.txt")]
-    print("globbing converted files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
-    paths = [PY_SOURCEFILES_LOCATION + conv_path[conv_path.rfind('/')+1:-4] for conv_path in converted_paths]
+    get_source_file_names_from_converted_folder(converted_path, PY_SOURCEFILES_LOCATION)
 
 
 print("converted file amount: " + str(len(converted_paths)))
@@ -395,8 +387,8 @@ if PERFORM_DATASET_COPY:
                         train_outfile.write(infile.read())
                     else:
                         test_outfile.write(infile.read())
-
-    print("the writing of converted files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    print_elapsed_seconds(start_time, "the writing of converted files")
+    # print("the writing of converted files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
 
 # %%
 def load_dataset(train_path,test_path,tokenizer):
@@ -447,68 +439,6 @@ dataset_dict = {
 print(dataset_dict["token"])
 
 print("loaded configs!")
-
-# %%
-from transformers.utils.dummy_pt_objects import GPT2LMHeadModel
-from transformers import GPT2Tokenizer
-from transformers import GPT2Config, EncoderDecoderConfig, EncoderDecoderModel
-
-
-class MultitaskModel(transformers.PreTrainedModel):
-    def __init__(self, encoder, taskmodels_dict):
-        """
-        Setting MultitaskModel up as a PretrainedModel allows us
-        to take better advantage of Trainer features
-        """
-        super().__init__(transformers.PretrainedConfig())
-
-        self.encoder = encoder
-        self.taskmodels_dict = nn.ModuleDict(taskmodels_dict)
-
-    def _get_models(self):
-      return self.taskmodels_dict
-
-    @classmethod
-    def create(cls, model_name, model_type_dict, model_config_dict):
-        """
-        This creates a MultitaskModel using the model class and config objects
-        from single-task models. 
-
-        We do this by creating each single-task model, and having them share
-        the same encoder transformer.
-        """
-        shared_encoder = None
-        taskmodels_dict = {}
-        for task_name, model_type in model_type_dict.items():
-            model = model_type.from_pretrained( "gpt2",
-                config=model_config_dict[task_name],
-            )
-            if shared_encoder is None:
-                shared_encoder = cls.get_encoder(model)
-            else:
-                setattr(model, "encoder", shared_encoder)
-            taskmodels_dict[task_name] = model
-        return cls(encoder=shared_encoder, taskmodels_dict=taskmodels_dict)
-    
-
-    @classmethod
-    def get_encoder(cls, model):
-        """
-        The encoder transformer is named differently in each model "architecture".
-        This method lets us get the name of the encoder attribute
-        """
-        model_class_name = model.__class__.__name__
-        if model_class_name.startswith("Roberta"):
-            return "roberta-base"
-        elif model_class_name.startswith("GPT2"):
-            config = EncoderDecoderConfig.from_encoder_decoder_configs(model.config, model.config) 
-            encoder_decoder = EncoderDecoderModel(config=config)
-            return encoder_decoder.config.encoder
-        else:
-            raise KeyError(f"Add support for new model {model_class_name}")
-    
-    def forward(self, task_name, **kwargs):
-        return self.taskmodels_dict[task_name](**kwargs)
 
 # %%
 model_name = "gpt2"
@@ -717,13 +647,13 @@ DO_TRAIN = True
 trainer = MultitaskTrainer(
     model=multitask_model,
     args=transformers.TrainingArguments(
-        output_dir="./models/multitask_model_millionplus",
+        output_dir="./models/multitask_model_testtraintime",
         overwrite_output_dir=DO_TRAIN,
         learning_rate=1e-5,
         do_train=DO_TRAIN,
         num_train_epochs=100,
         # Adjust batch size if this doesn't fit on the Colab GPU
-        per_device_train_batch_size=16,  
+        per_device_train_batch_size=24,  
         save_steps=110000,
         fp16=True,
         eval_accumulation_steps=8
@@ -739,7 +669,7 @@ else:
 # %%
 # From: https://discuss.huggingface.co/t/using-trainer-at-inference-time/9378/5
 model_to_save = trainer.model.module if hasattr(trainer.model, 'module') else trainer.model  # Take care of distributed/parallel training
-model_to_save.save_pretrained('./pretrained_models/one-point-six-million')
+model_to_save.save_pretrained('./pretrained_models/testtraintime')
 
 
 # %%
@@ -782,3 +712,4 @@ print("mrr_dict:")
 print(mrr_dict)
 
 # %%
+list
