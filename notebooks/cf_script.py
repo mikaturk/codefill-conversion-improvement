@@ -1,5 +1,5 @@
 # %% [markdown]
-# Install the correct dependencies on HuggingFace transformer and ternsorflow
+# Install the correct dependencies on HuggingFace transformer and tensorflow
 
 # %%
 # We won't need TensorFlow here
@@ -36,25 +36,50 @@ from pathlib import Path
 import json
 from joblib import Parallel, delayed
 from pathlib import Path
-from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,DataCollatorForLanguageModeling, trainer_utils
+from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,DataCollatorForLanguageModeling, trainer_utils, AutoModel
+import transformers
 import glob
 import random
 from cf_shared.utils import get_source_file_names_from_converted_folder, get_elapsed_us, print_elapsed_seconds
 from cf_shared.MultitaskModel import MultitaskModel
 
-# os.environ["CUDA_VISIBLE_DEVICES"]="1"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
+
+DATA_PATH = "/mnt/mturk/cf_sample_data/"
+
+os.chdir(DATA_PATH + "/script-environments/")
+RUN_NAME = "100k"
+
+run_path = "./" + RUN_NAME
+if not os.path.exists(run_path):
+    os.makedirs(run_path)
+
+os.chdir(run_path)
 
 DEBUG_FILENAMES = False
 PERFORM_CONVERSION = False
 PERFORM_DATASET_COPY = False
+DO_TRAIN = True
 THREADS = 20
-MAX_PATHS = 10_000
-TIMES_JSON = 'times_script_10k.json'
-PY_SOURCEFILES_LOCATION = './deduplicated_code_fill_pretrain/'
+MAX_PATHS = 100_000
+TIMES_JSON = "times.json"
+PY_SOURCEFILES_LOCATION = DATA_PATH + "deduplicated_code_fill_pretrain/"
 
-os.chdir('/mnt/mturk/cf_sample_data/')
+LOAD_PRETRAINED_MODEL = not DO_TRAIN
 
-converted_path = './converted_all_lt_1mb/'
+TRAINER_ARGS = transformers.TrainingArguments(
+    output_dir=DATA_PATH + "/checkpoints/" + RUN_NAME,
+    overwrite_output_dir=DO_TRAIN,
+    learning_rate=1e-5,
+    do_train=DO_TRAIN,
+    num_train_epochs=4,
+    # Adjust batch size if this doesn"t fit on the Colab GPU
+    per_device_train_batch_size=20,  
+    fp16=True,
+    save_steps=10000
+)
+
+converted_path = "./converted/"
 if not os.path.exists(converted_path):
     os.makedirs(converted_path)
 
@@ -256,8 +281,8 @@ WEIGHT_MATRIX = {
         'FUNCTION_NAME' : [1.625, 1.25, 1.5]
     }
 
-input_file = "/tmp/input_file.txt"
-output_file = "/tmp/output_file.txt"
+input_file = "./input_file.txt"
+output_file = "./output_file.txt"
 def reranking_layer(outputs, context, tokenizer):
 
   with open(input_file, 'w') as f:
@@ -277,17 +302,14 @@ def reranking_layer(outputs, context, tokenizer):
 
 # %%
 # pretrain dataset
-# !wget https://huggingface.co/rgismondi/python-50k-dedup/blob/main/pretrain_dataset.zip
 # !wget https://huggingface.co/rgismondi/python-50k-dedup/resolve/main/pretrain_dataset.zip
 # !unzip 'pretrain_dataset.zip'
 
 # converted dataset
-# ! wget https://huggingface.co/rgismondi/python-50k-dedup/blob/main/converted_dataset.zip
 # ! wget https://huggingface.co/rgismondi/python-50k-dedup/resolve/main/converted_dataset.zip
 # ! unzip 'converted_dataset.zip'
 
 # test dataset
-# !wget https://huggingface.co/rgismondi/python-50k-dedup/blob/main/finetune_eval_dataset.zip
 # !wget https://huggingface.co/rgismondi/python-50k-dedup/resolve/main/finetune_eval_dataset.zip
 # !unzip 'finetune_eval_dataset.zip'
 
@@ -345,15 +367,16 @@ if PERFORM_CONVERSION:
     start_time = datetime.datetime.now()
     paths_input = [str(x) for x in Path(PY_SOURCEFILES_LOCATION).glob("*.py*")]
     paths_input = paths_input[:MAX_PATHS]
-    print("globbing files from disk took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    print_elapsed_seconds(start_time, "globbing files from disk")
+
     start_time = datetime.datetime.now()
     converted_paths_filtered = convert_paths(paths_input)
-    print("converting files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    print_elapsed_seconds(start_time, "converting files")
     paths = list(map(lambda x: x[0], converted_paths_filtered))
     converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
 else:
     print("skipping conversion")
-    get_source_file_names_from_converted_folder(converted_path, PY_SOURCEFILES_LOCATION)
+    converted_paths = get_source_file_names_from_converted_folder(converted_path, PY_SOURCEFILES_LOCATION)
 
 
 print("converted file amount: " + str(len(converted_paths)))
@@ -374,7 +397,8 @@ if PERFORM_DATASET_COPY:
 
     # TODO: Parallelize these, they are independent and take a lot of time 
     # (provided the disks can do more I/O at a higher queue depth)
-    print("the writing of source files took: {:0.2f}s".format(get_elapsed_us(start_time)/1e6))
+    print_elapsed_seconds(start_time, "the writing of source files")
+
     start_time = datetime.datetime.now()
     print("starting the writing of converted files")
 
@@ -409,13 +433,17 @@ def load_dataset(train_path,test_path,tokenizer):
 
 train_dataset,test_dataset,data_collator = load_dataset("./train.txt", "./test.txt",tokenizer)
 converted_train_dataset, converted_test_dataset, converted_datacollator = load_dataset("./converted_train.txt", "./converted_test.txt",tokenizer)
+
+train_dataset,test_dataset,data_collator = load_dataset("./train.txt", "./test_example.txt",tokenizer)
+converted_train_dataset, converted_test_dataset, converted_datacollator = load_dataset("./converted_train.txt", "./converted_test_example.txt",tokenizer)
+
 # TODO: Ask what these lines are for.
 # pretrain_raw_files = glob.glob("./pretrain_dataset" + '/**/*.py', recursive=True)
 # pretrain_converted_files = glob.glob("./pretrain_converted_dataset" + '/**/*.py', recursive=True)
 
 # raise Exception("stopping the script...")
 # %%
-# tokenizer("for i in range(10)")["input_ids"]
+tokenizer("for i in range(10)")["input_ids"]
 
 # %%
 import numpy as np
@@ -432,7 +460,7 @@ logging.basicConfig(level=logging.INFO)
 
 dataset_dict = {
     "token": train_dataset,
-    "token_type": train_dataset,
+    "token_type": converted_train_dataset,
     "line": train_dataset,
 }
 
@@ -441,20 +469,24 @@ print(dataset_dict["token"])
 print("loaded configs!")
 
 # %%
-model_name = "gpt2"
-multitask_model = MultitaskModel.create(
-    model_name=model_name,
-    model_type_dict={
-        "token": transformers.AutoModelWithLMHead,
-        "token_type": transformers.AutoModelWithLMHead,
-        "line": transformers.AutoModelForSequenceClassification,
-    },
-    model_config_dict={
-        "token": transformers.AutoConfig.from_pretrained(model_name),
-        "token_type": transformers.AutoConfig.from_pretrained(model_name),
-        "line": transformers.AutoConfig.from_pretrained(model_name),
-    },
-)
+
+if LOAD_PRETRAINED_MODEL:
+    multitask_model = AutoModel.from_pretrained('./pretrained_models/one-point-six-million')
+else:
+    model_name = "gpt2"
+    multitask_model = MultitaskModel.create(
+        model_name=model_name,
+        model_type_dict={
+            "token": transformers.AutoModelWithLMHead,
+            "token_type": transformers.AutoModelWithLMHead,
+            "line": transformers.AutoModelForSequenceClassification,
+        },
+        model_config_dict={
+            "token": transformers.AutoConfig.from_pretrained(model_name),
+            "token_type": transformers.AutoConfig.from_pretrained(model_name),
+            "line": transformers.AutoConfig.from_pretrained(model_name),
+        },
+    )
 
 # %%
 # Check that we have a GPU
@@ -642,29 +674,17 @@ class MultitaskTrainer(transformers.Trainer):
         return (loss, outputs) if return_outputs else loss
     
 # %%
-DO_TRAIN = True
 
 trainer = MultitaskTrainer(
     model=multitask_model,
-    args=transformers.TrainingArguments(
-        output_dir="./models/multitask_model_testtraintime",
-        overwrite_output_dir=DO_TRAIN,
-        learning_rate=1e-5,
-        do_train=DO_TRAIN,
-        num_train_epochs=100,
-        # Adjust batch size if this doesn't fit on the Colab GPU
-        per_device_train_batch_size=24,  
-        save_steps=110000,
-        fp16=True,
-        eval_accumulation_steps=8
-    ),
+    args=TRAINER_ARGS,
     data_collator=data_collator,
 )
 
 if DO_TRAIN:
     trainer.train()
-else:
-    trainer.train('./models/multitask_model_b5/checkpoint-21000/')
+# else:
+#     trainer.train('./models/multitask_model_b5/checkpoint-21000/')
 
 # %%
 # From: https://discuss.huggingface.co/t/using-trainer-at-inference-time/9378/5
@@ -710,6 +730,7 @@ print("accuracy_dict:")
 print(accuracy_dict)
 print("mrr_dict:")
 print(mrr_dict)
+print("preds_dict:")
+print(preds_dict)
 
 # %%
-list

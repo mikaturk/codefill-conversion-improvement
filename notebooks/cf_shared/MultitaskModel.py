@@ -1,6 +1,5 @@
 import torch.nn as nn
 
-from transformers.utils.dummy_pt_objects import GPT2LMHeadModel
 from transformers import GPT2Tokenizer
 from transformers import GPT2Config, EncoderDecoderConfig, EncoderDecoderModel
 import transformers
