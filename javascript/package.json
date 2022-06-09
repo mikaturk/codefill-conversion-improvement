@@ -1,0 +1,16 @@
+{
+  "name": "codefill-javascript-preprocessing",
+  "version": "0.0.1",
+  "description": "Preprocessing for javascript files for CodeFill",
+  "main": "convert_dir.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Mika Turk <git@mikaturk.nl>",
+  "license": "UNLICENCED",
+  "type": "module",
+  "dependencies": {
+    "js-tokens": "^8.0.0"
+  }
+}
