@@ -9,6 +9,7 @@
 **/*.zip
 **/*.csv
 **/*.json
+**/*.png
 
 # Testing Data
 notebooks/slowfiles
@@ -16,6 +17,7 @@ notebooks/convert/*.interactive
 
 # Temp Files
 **/cached_*
+**/.pytest_cache
 notebooks/med.py
 notebooks/normalized_textual_file.py
 notebooks/*.txt
@@ -24,7 +26,7 @@ notebooks/*.txt
 # Reason: We only use python notebooks with special comments
 # that VS Code runs like notebooks
 
-*.ipynb
+
 
 # cache
 **/__pycache__

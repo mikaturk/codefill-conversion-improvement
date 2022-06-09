@@ -15,8 +15,6 @@
 # transformers version at notebook update --- 2.11.0
 # tokenizers version at notebook update --- 0.8.0rc1
 
-# %% [markdown]
-# Fetch datasets
 
 # %%
 import datetime
@@ -40,22 +38,17 @@ from transformers import AutoTokenizer, RobertaForQuestionAnswering,TextDataset,
 import transformers
 import glob
 import random
-from cf_shared.utils import get_source_file_names_from_converted_folder, get_elapsed_us, print_elapsed_seconds
+from cf_shared.utils import cf_glob, get_source_and_converted_paths, get_source_file_names_from_converted_folder, get_elapsed_us, print_elapsed_seconds, timed_cf_glob
 from cf_shared.MultitaskModel import MultitaskModel
+from cf_shared.convert import convert, convert_paths, get_successful_conversions
 
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 DATA_PATH = "/mnt/mturk/cf_sample_data/"
 
-os.chdir(DATA_PATH + "/script-environments/")
+os.chdir(os.path.join(DATA_PATH, "script-environments/"))
+
 RUN_NAME = "100k"
-
-run_path = "./" + RUN_NAME
-if not os.path.exists(run_path):
-    os.makedirs(run_path)
-
-os.chdir(run_path)
-
 DEBUG_FILENAMES = False
 PERFORM_CONVERSION = False
 PERFORM_DATASET_COPY = False
@@ -63,12 +56,13 @@ DO_TRAIN = True
 THREADS = 20
 MAX_PATHS = 100_000
 TIMES_JSON = "times.json"
-PY_SOURCEFILES_LOCATION = DATA_PATH + "deduplicated_code_fill_pretrain/"
+CONVERTED_PATH = "./converted/"
+PY_SOURCEFILES_LOCATION = os.path.join(DATA_PATH, "deduplicated_code_fill_pretrain/")
 
 LOAD_PRETRAINED_MODEL = not DO_TRAIN
 
 TRAINER_ARGS = transformers.TrainingArguments(
-    output_dir=DATA_PATH + "/checkpoints/" + RUN_NAME,
+    output_dir=os.path.join(DATA_PATH, "checkpoints", RUN_NAME),
     overwrite_output_dir=DO_TRAIN,
     learning_rate=1e-5,
     do_train=DO_TRAIN,
@@ -79,207 +73,23 @@ TRAINER_ARGS = transformers.TrainingArguments(
     save_steps=10000
 )
 
-converted_path = "./converted/"
-if not os.path.exists(converted_path):
-    os.makedirs(converted_path)
+run_path = "./" + RUN_NAME
+if not os.path.exists(run_path):
+    os.makedirs(run_path)
+
+os.chdir(run_path)
+
+if not os.path.exists(CONVERTED_PATH):
+    os.makedirs(CONVERTED_PATH)
 
 save_stdout = sys.stdout
 
-def multireplace(string, replacements, ignore_case=False):
-    """
-    Given a string and a replacement map, it returns the replaced string.
-    :param str string: string to execute replacements on
-    :param dict replacements: replacement dictionary {value to find: value to replace}
-    :param bool ignore_case: whether the match should be case insensitive
-    :rtype: str
-    """
-    if replacements == {}:
-        return string
-    # If case insensitive, we need to normalize the old string so that later a replacement
-    # can be found. For instance with {"HEY": "lol"} we should match and find a replacement for "hey",
-    # "HEY", "hEy", etc.
-    if ignore_case:
-        def normalize_old(s):
-            return s.lower()
-        re_mode = re.IGNORECASE
-    else:
-        def normalize_old(s):
-            return s
-        re_mode = 0
-
-    replacements = {normalize_old(key): val for key, val in replacements.items()}
-    
-    # Place longer ones first to keep shorter substrings from matching where the longer ones should take place
-    # For instance given the replacements {'ab': 'AB', 'abc': 'ABC'} against the string 'hey abc', it should produce
-    # 'hey ABC' and not 'hey ABc'
-    rep_sorted = sorted(replacements, key=len, reverse=True)
-    rep_escaped = map(re.escape, rep_sorted)
-    
-    # Create a big OR regex that matches any of the substrings to replace
-    pattern = re.compile("|".join(rep_escaped), re_mode)
-    
-    # For each match, look up the new string in the replacements, being the key the normalized old string
-    return pattern.sub(lambda match: replacements[normalize_old(match.group(0))], string)
-
-
-def convert(file, output_file):
-    if DEBUG_FILENAMES: print("starting "+output_file, file=save_stdout)
-    with open (file, "r") as f:
-        text = f.read()  
-
-    replacements = {}
-    for node in ast.iter_child_nodes(ast.parse(text)):
-        if isinstance(node, ast.ImportFrom):
-            replacements.update({node.module: 'MODULE'})
-        if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
-            for i, v in enumerate(node.names):
-                if(node.names[i].asname):
-                    replacements.update({node.names[i].name: 'LIB'})                
-                    replacements.update({node.names[i].asname: 'ALIAS'})
-                else:
-                    replacements.update({node.names[i].name: 'LIBRARY'})
-
-
-    # reomve * from the dictionary (handle from module import * statement)
-    replacements.pop('*', None)
-    # print('List of modules and libraries to replace:\n', replacements)
-
-    med = multireplace(text, replacements, ignore_case = True)
-
-    tokens = tokenize.tokenize(BytesIO(med.encode('utf-8')).readline)
-        
-    ### extract important data from the output of tokenize package
-
-    last_line = 0
-    last_pos = 0
-    tokss = []
-    for token in tokens:
-        
-        tok_org = token.string
-        tok_text = token.string    
-        # tok_type = str(token).split('(')[2].split(')')[0]
-        tok_type = tokenize.tok_name[token.type]
-
-        # convert keywords to upper
-        if keyword.iskeyword(tok_text):
-            tok_type = str.upper(tok_text)
-        
-        #extract operations
-        # if tok_type == 'OP':
-        #     tok_type = tok_text
-
-
-        # getting rid of comments and empty lines
-        if tok_type in ['NL','NEWLINE','COMMENT']:
-            continue
-        
-        #retrieve the position
-        tok_line = token.start[0]
-        
-        if last_line == tok_line:
-            last_pos +=  1
-        else:
-            last_pos = 1
-        tok_pos = last_pos
-        last_line = tok_line
-        
-        tokss.append({'type':tok_type,
-                            'original':tok_org,
-                            'text':tok_text,
-                            'line':tok_line,
-                            'pos':tok_pos})
-
-    toks = pd.DataFrame(tokss)
-
-    # remove encoding lines and end of file
-    toks.line = toks.line.astype('int')
-    toks.pos = toks.pos.astype('int')
-    toks = toks.loc[~((toks.type == 'ENCODING') | (toks.type == 'ENDMARKER'))]
-    toks['doc'] = (toks.text.str.contains('"""') | toks.text.str.contains("'''"))
-    toks = toks.loc[~(toks.doc)].drop(['doc'],axis=1)
-
-    indent = 0
-    last_line = 0
-
-    tokss = [] # PERF
-
-    for row in toks.itertuples():
-        if row.type == "INDENT":
-            indent +=1
-            continue
-        if row.type == "DEDENT":
-            indent -=1
-            continue
-        if row.line != last_line:
-            last_line = row.line
-            tokss.append({'type':'\n'+indent*'\t',
-                                'text':'\n'+indent*'\t',
-                                'line':row.line,
-                                'pos':row.pos-1})
-    
-    toks = pd.concat([toks, pd.DataFrame(tokss)])
-
-    toks = toks.loc[~((toks.type=='INDENT') | (toks.type=='DEDENT'))]
-    toks = toks.sort_values(['line','pos']).reset_index(drop=True)
-
-    # drop the first row (empty line)
-    toks.drop(toks.index[:1], inplace=True)
-
-    src = text
-    stdout_backup = sys.stdout
-    dis_result = StringIO()
-    sys.stdout = dis_result
-    dis.dis(src)
-    sys.stdout = stdout_backup
-
-    lines = dis_result.getvalue().split('\n')
-
-    # find global variables
-    glbls = [].copy()    
-    for l in lines:
-        clean = l.replace('>>',' ').strip().split()
-        if len(clean):
-            try:
-                int(clean[1])
-                line = int(clean[0])
-            except:
-                clean = [str(line)]+clean
-            if 'LOAD_GLOBAL' in clean:
-                # print('found a global!')
-                glbls.append((int(clean[0]),clean[-1].replace('(','').replace(')','')))
-
-    for l,n in glbls:
-        line_eq = toks.loc[toks.line==l]
-        line_eq.loc[line_eq.text==n, 'type'] = 'GLOBAL_VARIABLE'
-        
-    # text_imports = ' '.join(list(toks.text)).replace('\n ','\n').replace(' \n','\n').replace('\t ','\t').replace(' . ','.').replace(' (','(')
-    # text_imports = multireplace(text_imports, replacements, ignore_case = True)
-
-    # with open('normalized_textual_file.py','w') as f:
-    #     f.write(text_imports)
-
-    
-    toks.loc[toks['text'].isin(['LIBRARY','LIB','ALIAS','MODULE']), 'type'] = toks['text']
-
-    code_converted = ' '.join(list(toks.type)).replace('\n ','\n').replace(' \n','\n').replace('\t ','\t').replace(' . ','.').replace(' (','(')
-
-    final_replacements = {'GLOBAL_VARIABLE(':'FUNCTION_CALL(',                      
-    #                       'NAME.NAME':'NAME',
-                          'NAME(':'FUNCTION_CALL(',
-                          'NAME':'LOCAL_VARIABLE'}
-
-    code_converted = multireplace(code_converted, final_replacements, ignore_case = False)
-
-    with open(output_file,'w') as f:
-        f.write(code_converted)
-    if DEBUG_FILENAMES: print("finished "+output_file, file=save_stdout)
-
 WEIGHT_MATRIX = {
-        'NUMBER' : [1.625, 1.25, 1.125],
-        'NAME' : [1.625, 1.125, 1.5],
-        'LOCAL_VARIABLE' : [1.625, 1.125, 1.5],
-        'FUNCTION_NAME' : [1.625, 1.25, 1.5]
-    }
+    'NUMBER' : [1.625, 1.25, 1.125],
+    'NAME' : [1.625, 1.125, 1.5],
+    'LOCAL_VARIABLE' : [1.625, 1.125, 1.5],
+    'FUNCTION_NAME' : [1.625, 1.25, 1.5]
+}
 
 input_file = "./input_file.txt"
 output_file = "./output_file.txt"
@@ -295,89 +105,78 @@ def reranking_layer(outputs, context, tokenizer):
         loss_fct = nn.CrossEntropyLoss(weight=torch.tensor(WEIGHT_MATRIX[item[1]]))
 
 # %%
-# %load_ext line_profiler
-# %lprun -f convert convert("sample_data/data/raw_to_mat.py", "sample_data/converted/raw_to_mat.txt")
-# %lprun -f convert convert("sample_data/data/0002_add_new_column_conference.py", "sample_data/converted/0002_add_new_column_conference.txt")
 
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
 
-# %%
-# pretrain dataset
-# !wget https://huggingface.co/rgismondi/python-50k-dedup/resolve/main/pretrain_dataset.zip
-# !unzip 'pretrain_dataset.zip'
+tokenizer = Tokenizer(BPE())
 
-# converted dataset
-# ! wget https://huggingface.co/rgismondi/python-50k-dedup/resolve/main/converted_dataset.zip
-# ! unzip 'converted_dataset.zip'
-
-# test dataset
-# !wget https://huggingface.co/rgismondi/python-50k-dedup/resolve/main/finetune_eval_dataset.zip
-# !unzip 'finetune_eval_dataset.zip'
-
-# %% [markdown]
-# Train a customised python byte-level Byte-pair encoding tokenizer. 
+trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"])
 
 # %%
 
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer.train(files=["training_set"], trainer=trainer)
 
 # %%
 
-def convert_optional(path, converted_path):
-    # Uncomment when using convert_new    
-    # tmp_dir = tempfile.mkdtemp()
+max_length = 2040
 
-    try:
-        b4 = datetime.datetime.now()
+def convert_to_token_features(batch):
+    inputs = list(zip(batch['token'], batch['token_label']))
+    features = tokenizer.batch_encode_plus(
+        inputs, max_length=max_length, pad_to_max_length=True
+    )
+    features["labels"] = batch["token_label"]
+    return features
 
-        # convert_new(path, converted_path, tmp_dir)
-        convert(path, converted_path)
+def convert_to_type_features(batch):
+    inputs = list(zip(batch['type'], batch['type_label']))
+    features = tokenizer.batch_encode_plus(
+        inputs, max_length=max_length, pad_to_max_length=True
+    )
+    features["labels"] = batch["type_lable"]
+    return features
 
-        # Uncomment when using convert_new    
-        # shutil.rmtree(tmp_dir)
-        return (path, converted_path, get_elapsed_us(b4), "s")
-    except:
-        # Uncomment when using convert_new    
-        # shutil.rmtree(tmp_dir)
-        return (path, converted_path, get_elapsed_us(b4), "f")
 
-def convert_paths(paths):
-    converted_paths_before = []
-    for path in paths:
-        file_name = path.split("/").pop()
-        # Enable this option for:
-        # hello.py -> hello.txt
-        # base_name = file_name[:file_name.rfind('.')]
 
-        # Enable this option for:
-        # hello.py -> hello.py.txt
-        base_name = file_name
-        converted_paths_before.append(converted_path + base_name + ".txt")
-    print("CONVERTING {} PYTHON FILES".format(len(paths)))
-    converted_paths_opt = Parallel(n_jobs=THREADS)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths_before))
-    with open(TIMES_JSON,'w') as fd:
-        fd.write(json.dumps(converted_paths_opt))
-        # fd.write('[\n'+',\n'.join(map(lambda x: "[\"{}\",{}]".format(*x),converted_paths_opt))+'\n]')
-    converted_paths_filtered = list(filter(lambda x: x[-1] == "s", converted_paths_opt))
-    sys.stdout = save_stdout
-    print("RESULT: {} FILES IN, {} FILES OUT".format(len(converted_paths_before), len(converted_paths_filtered)))
-    return converted_paths_filtered
+convert_func_dict = {
+    "token": convert_to_token_features,
+    "type": convert_to_type_features,
+    "line": convert_to_token_features,
+}
+
+columns_dict = {
+    "type": ['input_ids', 'attention_mask', 'labels'],
+    "token": ['input_ids', 'attention_mask', 'labels'],
+    "line": ['input_ids', 'attention_mask', 'labels'],
+}
+
+features_dict = {}
+for task_name, dataset in dataset_dict.items():
+    features_dict[task_name] = {}
+    for phase, phase_dataset in dataset.items():
+        features_dict[task_name][phase] = phase_dataset.map(
+            convert_func_dict[task_name],
+            batched=True,
+            load_from_cache_file=False,
+        )
+        features_dict[task_name][phase].set_format(
+            type="torch",
+            columns=columns_dict[task_name],
+        )
 
 if PERFORM_CONVERSION:
     print("starting conversion")
-    start_time = datetime.datetime.now()
-    paths_input = [str(x) for x in Path(PY_SOURCEFILES_LOCATION).glob("*.py*")]
-    paths_input = paths_input[:MAX_PATHS]
-    print_elapsed_seconds(start_time, "globbing files from disk")
+    paths_input = timed_cf_glob(PY_SOURCEFILES_LOCATION, "*.py*")
 
     start_time = datetime.datetime.now()
-    converted_paths_filtered = convert_paths(paths_input)
+    converted_paths_opt = convert_paths(paths_input, converted_path, times_json=TIMES_JSON, n_threads=20)
     print_elapsed_seconds(start_time, "converting files")
-    paths = list(map(lambda x: x[0], converted_paths_filtered))
-    converted_paths = list(map(lambda x: x[1], converted_paths_filtered))
+    paths, converted_paths = get_successful_conversions(converted_paths_opt)
 else:
     print("skipping conversion")
-    converted_paths = get_source_file_names_from_converted_folder(converted_path, PY_SOURCEFILES_LOCATION)
-
+    paths, converted_paths = get_source_and_converted_paths(converted_path, PY_SOURCEFILES_LOCATION)
 
 print("converted file amount: " + str(len(converted_paths)))
 
@@ -436,10 +235,6 @@ converted_train_dataset, converted_test_dataset, converted_datacollator = load_d
 
 train_dataset,test_dataset,data_collator = load_dataset("./train.txt", "./test_example.txt",tokenizer)
 converted_train_dataset, converted_test_dataset, converted_datacollator = load_dataset("./converted_train.txt", "./converted_test_example.txt",tokenizer)
-
-# TODO: Ask what these lines are for.
-# pretrain_raw_files = glob.glob("./pretrain_dataset" + '/**/*.py', recursive=True)
-# pretrain_converted_files = glob.glob("./pretrain_converted_dataset" + '/**/*.py', recursive=True)
 
 # raise Exception("stopping the script...")
 # %%

@@ -5,6 +5,9 @@ from pathlib import Path
 import torch
 from tokenizers import ByteLevelBPETokenizer
 from tokenizers.processors import TemplateProcessing
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
 from torch.utils.data import Dataset
 import random
 import datetime
@@ -41,15 +44,17 @@ if DO_TRAIN_TOKENIZER:
     print('first 5 paths:')
     print(paths[:5])
     print('total paths: ' + str(len(paths)))
-    tokenizer = ByteLevelBPETokenizer()
+    tokenizer = Tokenizer(BPE())
     start_time = datetime.datetime.now()
-    tokenizer.train(files=paths, vocab_size=len(paths), min_frequency=2, special_tokens=[
-        "<s>",
-        "<pad>",
-        "</s>",
-        "<unk>",
-        "<mask>",
-    ])
+    trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"])
+    tokenizer.train(files=["training_set"], trainer=trainer)
+    # tokenizer.train(files=paths, vocab_size=len(paths), min_frequency=2, special_tokens=[
+    #     "<s>",
+    #     "<pad>",
+    #     "</s>",
+    #     "<unk>",
+    #     "<mask>",
+    # ])
 
     print_elapsed_seconds(start_time, "training")
 
@@ -63,17 +68,19 @@ else:
 
 # %%
 
-model = GPT2LMHeadModel.from_pretrained(model_location)
+# model = AutoModelForSequenceClassification.from_pretrained(model_location, config=GPT2Config())
+model = GPT2LMHeadModel.from_pretrained(model_location, config=GPT2Config())
 # task_name = "line"
 # model = multitaskmodel.taskmodels_dict[task_name]
 
+model.summary()
 # %%
-
-generator = pipeline(task="text-generation", model=model, tokenizer=tokenizer)
+raise Exception("stopping the script early...")
+generator = pipeline(task="token", model=model, tokenizer=tokenizer)
 # generator = pipeline(task="text2text-generation", model=model, tokenizer=tokenizer)
 
 output_text = generator(
-"""def multiply_numbers(a, b):\n    return a *"""
+"""def multiply_numbers(a, b):\n    return """
 )
 
 print(output_text)
