@@ -8,8 +8,9 @@
 **/*.bin
 **/*.zip
 **/*.csv
-**/*.json
+notebooks/**/*.json
 **/*.png
+**/*.txt
 
 # Testing Data
 notebooks/slowfiles
@@ -26,7 +27,8 @@ notebooks/*.txt
 # Reason: We only use python notebooks with special comments
 # that VS Code runs like notebooks
 
-
+# modules
+**/node_modules
 
 # cache
 **/__pycache__

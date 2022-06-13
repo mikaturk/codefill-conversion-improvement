@@ -54,3 +54,10 @@ os.chdir('/home/mturk/rp/codefill/notebooks')
 # convert_cur.convert("slowfiles/145.py", "slowfiles/145.txt")
 # convert_cur.convert("slowfiles/BC_WA_policy.py", "slowfiles/BC_WA_policy.txt")
 convert_cur.convert("./test_example.txt", "./converted_test_example.txt")
+
+# %%
+os.chdir('/home/mturk/rp/codefill/notebooks/cf_shared/test-data')
+
+convert_prev.convert_original("source/global.py", "converted_reference/global.py.txt")
+
+convert_cur.convert("source/global.py", "converted_comparison/global.py.txt")

@@ -4,6 +4,7 @@ Refer to `convert.py` for actual implementations.
 """
 
 import datetime
+import os
 import shutil
 import tempfile
 import tokenize
@@ -361,6 +362,19 @@ def convert_old(file, output_file, tmp_dir):
 
     with open(output_file,'w') as f:
         f.write(code_converted)
+
+def convert_optional_original(file_path, converted_path):
+    tmp_dir = tempfile.mkdtemp()
+    cwd = os.getcwd()
+    try:
+        file_path_abs = os.path.abspath(file_path)
+        converted_path_abs = os.path.abspath(converted_path)
+        os.chdir(tmp_dir)
+        convert_original(file_path_abs, converted_path_abs)
+    except:
+        pass
+    os.chdir(cwd)
+    shutil.rmtree(tmp_dir)
 
 def convert_optional_old(file_path, converted_path):
     tmp_dir = tempfile.mkdtemp()
