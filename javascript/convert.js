@@ -1,5 +1,10 @@
 import jsTokens from "js-tokens";
 
+/**
+ * Converts a JavaScript file into a token file for use in CodeFill.
+ * @param {string} str A JavaScript file represented by a string
+ * @returns {string} The token form of the input file
+ */
 export function convert(str) {
     const tokens = jsTokens(str);
     const output_parts = [];
@@ -13,8 +18,6 @@ export function convert(str) {
             case "TemplateMiddle":
             case "TemplateTail":
             case "RegularExpressionLiteral":
-            case "MultiLineComment":
-            case "SingleLineComment":
             case "IdentifierName":
             case "PrivateIdentifier":
             case "NumericLiteral":
@@ -26,12 +29,14 @@ export function convert(str) {
                 break;
             }
 
+            case "MultiLineComment":
+            case "SingleLineComment":
             case "WhiteSpace": break;
+
             case "LineTerminatorSequence": {
-                // Remove empty lines
-                // TODO: account for lines with only whitespace
-                if (prevToken.type == "LineTerminatorSequence") break;
-                output_parts.push(output_line.join(' '));
+                // Only add a line if it has content
+                if (output_line.length > 0)
+                    output_parts.push(output_line.join(' '));
                 output_line = [];
                 break;
             }
