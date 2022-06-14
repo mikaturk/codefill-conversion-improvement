@@ -191,6 +191,7 @@ def converts(text: str) -> str:
     for l,n in glbls:
         line_eq = toks.loc[toks.line==l]
         line_eq.loc[line_eq.text==n, 'type'] = 'GLOBAL_VARIABLE'
+        toks.loc[toks.line==l] = line_eq
     
     toks.loc[toks['text'].isin(['LIBRARY','LIB','ALIAS','MODULE']), 'type'] = toks['text']
 
