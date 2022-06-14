@@ -33,7 +33,9 @@ TEST_DATASET_SOURCE_FOLDER = "test-data/source"
 CONVERTED_COMPARISON_FOLDER = "test-data/converted_comparison"
 
 def create_reference_conversion(paths: List[str]):
-  os.makedirs(CONVERTED_REFERENCE_FOLDER)
+  if not os.path.exists(CONVERTED_REFERENCE_FOLDER):
+    os.makedirs(CONVERTED_REFERENCE_FOLDER)
+  
   for path in paths:
     converted_path = get_converted_file_path_add(CONVERTED_REFERENCE_FOLDER, path)
     convert_optional_original(path, converted_path)
@@ -50,12 +52,10 @@ def test_convert_paths():
 
   paths = cf_glob(TEST_DATASET_SOURCE_FOLDER, '*.py*')
 
-  if not os.path.exists(CONVERTED_REFERENCE_FOLDER):
-    create_reference_conversion(paths)
+  create_reference_conversion(paths)
   
   if not os.path.exists(CONVERTED_COMPARISON_FOLDER):
-      os.makedirs(CONVERTED_COMPARISON_FOLDER)
-
+    os.makedirs(CONVERTED_COMPARISON_FOLDER)
 
   expected_conversion_results: List[ConversionResult] = [
     (
