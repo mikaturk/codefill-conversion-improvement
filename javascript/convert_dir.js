@@ -1,12 +1,6 @@
-import { readdir, readFile, writeFile, mkdir } from "node:fs/promises"
+import { readdir, mkdir } from "node:fs/promises"
 import { join } from "node:path"
-import { convert } from "./convert.js";
-
-async function convert_file(path, output_path) {
-    const source_str = await readFile(path).then(x=>x.toString())
-    const converted = convert(source_str);
-    await writeFile(output_path, converted);
-}
+import { convert_file } from "./convert.js";
 
 /**
  * Convert a whole directory of JavaScript source files to token representation.

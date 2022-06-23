@@ -8,7 +8,7 @@
   },
   "keywords": [],
   "author": "Mika Turk <git@mikaturk.nl>",
-  "license": "UNLICENCED",
+  "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
     "js-tokens": "^8.0.0"

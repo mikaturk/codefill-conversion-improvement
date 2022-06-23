@@ -3,8 +3,13 @@ import random
 import shutil
 import os
 import sys
-sys.path.append("..")
+
+# Add the parent folder to the path for imports
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from cf_shared.utils import get_source_paths_from_converted_folder
+
+
+# Script copies successfully converted source files to a new folder
 
 os.chdir('/mnt/mturk/cf_sample_data/')
 

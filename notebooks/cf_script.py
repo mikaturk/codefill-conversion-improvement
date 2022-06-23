@@ -1,3 +1,12 @@
+"""
+This script was converted from the CodeFill notebook in an attempt to get it to work.
+Parts of the code were obtained from the CodeFill implementation reference at https://zenodo.org/record/5440779
+
+I did not succeed in getting it to work but you still might like to read it.
+
+Original notebook: https://github.com/saltudelft/codefill/blob/main/notebooks/CodeFill.ipynb
+"""
+
 # %% [markdown]
 # Install the correct dependencies on HuggingFace transformer and tensorflow
 
@@ -118,65 +127,17 @@ trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]
 
 tokenizer.train(files=["training_set"], trainer=trainer)
 
-# %%
-
-max_length = 2040
-
-def convert_to_token_features(batch):
-    inputs = list(zip(batch['token'], batch['token_label']))
-    features = tokenizer.batch_encode_plus(
-        inputs, max_length=max_length, pad_to_max_length=True
-    )
-    features["labels"] = batch["token_label"]
-    return features
-
-def convert_to_type_features(batch):
-    inputs = list(zip(batch['type'], batch['type_label']))
-    features = tokenizer.batch_encode_plus(
-        inputs, max_length=max_length, pad_to_max_length=True
-    )
-    features["labels"] = batch["type_lable"]
-    return features
-
-
-
-convert_func_dict = {
-    "token": convert_to_token_features,
-    "type": convert_to_type_features,
-    "line": convert_to_token_features,
-}
-
-columns_dict = {
-    "type": ['input_ids', 'attention_mask', 'labels'],
-    "token": ['input_ids', 'attention_mask', 'labels'],
-    "line": ['input_ids', 'attention_mask', 'labels'],
-}
-
-features_dict = {}
-for task_name, dataset in dataset_dict.items():
-    features_dict[task_name] = {}
-    for phase, phase_dataset in dataset.items():
-        features_dict[task_name][phase] = phase_dataset.map(
-            convert_func_dict[task_name],
-            batched=True,
-            load_from_cache_file=False,
-        )
-        features_dict[task_name][phase].set_format(
-            type="torch",
-            columns=columns_dict[task_name],
-        )
-
 if PERFORM_CONVERSION:
     print("starting conversion")
     paths_input = timed_cf_glob(PY_SOURCEFILES_LOCATION, "*.py*")
 
     start_time = datetime.datetime.now()
-    converted_paths_opt = convert_paths(paths_input, converted_path, times_json=TIMES_JSON, n_threads=20)
+    converted_paths_opt = convert_paths(paths_input, CONVERTED_PATH, times_json=TIMES_JSON, n_threads=20)
     print_elapsed_seconds(start_time, "converting files")
     paths, converted_paths = get_successful_conversions(converted_paths_opt)
 else:
     print("skipping conversion")
-    paths, converted_paths = get_source_and_converted_paths(converted_path, PY_SOURCEFILES_LOCATION)
+    paths, converted_paths = get_source_and_converted_paths(CONVERTED_PATH, PY_SOURCEFILES_LOCATION)
 
 print("converted file amount: " + str(len(converted_paths)))
 
@@ -262,6 +223,54 @@ dataset_dict = {
 print(dataset_dict["token"])
 
 print("loaded configs!")
+
+# %%
+
+max_length = 2040
+
+def convert_to_token_features(batch):
+    inputs = list(zip(batch['token'], batch['token_label']))
+    features = tokenizer.batch_encode_plus(
+        inputs, max_length=max_length, pad_to_max_length=True
+    )
+    features["labels"] = batch["token_label"]
+    return features
+
+def convert_to_type_features(batch):
+    inputs = list(zip(batch['type'], batch['type_label']))
+    features = tokenizer.batch_encode_plus(
+        inputs, max_length=max_length, pad_to_max_length=True
+    )
+    features["labels"] = batch["type_lable"]
+    return features
+
+
+
+convert_func_dict = {
+    "token": convert_to_token_features,
+    "type": convert_to_type_features,
+    "line": convert_to_token_features,
+}
+
+columns_dict = {
+    "type": ['input_ids', 'attention_mask', 'labels'],
+    "token": ['input_ids', 'attention_mask', 'labels'],
+    "line": ['input_ids', 'attention_mask', 'labels'],
+}
+
+features_dict = {}
+for task_name, dataset in dataset_dict.items():
+    features_dict[task_name] = {}
+    for phase, phase_dataset in dataset.items():
+        features_dict[task_name][phase] = phase_dataset.map(
+            convert_func_dict[task_name],
+            batched=True,
+            load_from_cache_file=False,
+        )
+        features_dict[task_name][phase].set_format(
+            type="torch",
+            columns=columns_dict[task_name],
+        )
 
 # %%
 

@@ -2,10 +2,12 @@ import os
 import shutil
 import sys
 from typing import List
+import datetime
 
-sys.path.append("..")
+# Add the parent folder to the path for imports
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from cf_shared.convert_previous import convert_optional_original
-from cf_shared.utils import cf_glob
+from cf_shared.utils import cf_glob, print_elapsed_seconds
 from cf_shared.convert import ConversionResult, convert_paths, get_converted_file_path_add, get_converted_file_path_replace
 
 def test_get_converted_file_path_add():
@@ -48,11 +50,12 @@ def test_convert_paths():
   """Integration test, tests both the batching of conversion as well as 
   the implementation of `convert` and `converts`.
   """
-  shutil.rmtree(CONVERTED_REFERENCE_FOLDER, ignore_errors=True)
 
   paths = cf_glob(TEST_DATASET_SOURCE_FOLDER, '*.py*')
 
+  start_time = datetime.datetime.now()
   create_reference_conversion(paths)
+  print_elapsed_seconds(start_time, "reference conversion")
   
   if not os.path.exists(CONVERTED_COMPARISON_FOLDER):
     os.makedirs(CONVERTED_COMPARISON_FOLDER)
@@ -67,13 +70,18 @@ def test_convert_paths():
     ) for path in paths
   ]
 
-  conversion_results = convert_paths(paths, CONVERTED_COMPARISON_FOLDER, n_threads=2)
+  start_time = datetime.datetime.now()
+  conversion_results = convert_paths(paths, CONVERTED_COMPARISON_FOLDER, n_threads=10)
+  print_elapsed_seconds(start_time, "new conversion")
 
   for (cr1, cr2) in zip(expected_conversion_results, conversion_results):
     assert conversion_result_is_equal(cr1, cr2)
 
   reference_files = cf_glob(CONVERTED_REFERENCE_FOLDER, '*.txt')
   comparison_files = cf_glob(CONVERTED_COMPARISON_FOLDER, '*.txt')
+
+  reference_files.sort()
+  comparison_files.sort()
 
   print(reference_files)
   print(comparison_files)
@@ -86,3 +94,5 @@ def test_convert_paths():
 
     assert ref_text == comp_text
 
+if "__main__" == __name__:
+  test_convert_paths()

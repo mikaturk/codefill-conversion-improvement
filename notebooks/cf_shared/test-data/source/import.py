@@ -1,8 +1,7 @@
-from os import path
-import json
+import modulename as defaultExport
+from modulename import export1
+from modulename import export1 as alias1
+from modulename import export1, export2
+from modulename import export1, export2 as alias2
+import modulename
 
-print(path.join("./my_folder", "file.csv"))
-
-obj = json.loads('{"hi": 3}')
-
-print(obj["hi"])

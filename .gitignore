@@ -19,13 +19,9 @@ notebooks/convert/*.interactive
 # Temp Files
 **/cached_*
 **/.pytest_cache
-notebooks/med.py
-notebooks/normalized_textual_file.py
+notebooks/**/med.py
+notebooks/**/normalized_textual_file.py
 notebooks/*.txt
-
-# Notebooks
-# Reason: We only use python notebooks with special comments
-# that VS Code runs like notebooks
 
 # modules
 **/node_modules

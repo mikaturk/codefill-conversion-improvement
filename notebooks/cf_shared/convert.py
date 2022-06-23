@@ -225,18 +225,19 @@ def convert_optional(file_path: str, converted_path: str) -> ConversionResult:
     :param file_path: The location of the source file
     :param output_file: The location where the token file will be written
 
-    :return: 
+    :return: A `ConversionResult` tuple containing information about the conversion
     """
+    start_time = datetime.datetime.now()
+    error_str = None
+
     try:
-        start_time = datetime.datetime.now()
-
         convert(file_path, converted_path)
-
-        return (file_path, converted_path, get_elapsed_us(start_time), "s", None)
     except Exception as e:
         exc_info = sys.exc_info()
         error_str = ''.join(traceback.format_exception(*exc_info))
-        return (file_path, converted_path, get_elapsed_us(start_time), "f", error_str)
+    
+    status = "s" if error_str is None else "f"
+    return (file_path, converted_path, get_elapsed_us(start_time), status, error_str)
 
 def get_converted_file_path_replace(converted_path: str, source_file_path: str) -> str:
     """Used as a `path_converter` parameter to `convert_paths`
@@ -265,9 +266,10 @@ def get_converted_file_path_add(converted_path: str, source_file_path: str) -> s
 
 def convert_paths(paths: List[str], converted_path: str, times_json: Optional[str] = None,
     n_threads: int = -1, debug_output = sys.stdout,
+    convert_optional_function: Callable[[str, str], ConversionResult] = convert_optional,
     path_converter: Callable[[str, str], str] = get_converted_file_path_add
 ) -> List[ConversionResult]:
-    """Converts a list of python source files into a list of token files
+    """Converts a list of python source files into a list of token files using multi-threading
 
     :param paths: The locations of the source files
     :param converted_path: The folder that the token files will be written into
@@ -276,13 +278,15 @@ def convert_paths(paths: List[str], converted_path: str, times_json: Optional[st
     converted_paths_before = list(map(lambda path: path_converter(converted_path, path), paths))
     
     print("CONVERTING {} PYTHON FILES".format(len(paths)), file=debug_output)
-    converted_paths_opt = Parallel(n_jobs=n_threads)(delayed(convert_optional)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths_before))
+    converted_paths_opt = Parallel(n_jobs=n_threads)(delayed(convert_optional_function)(path, conv_path) for (path, conv_path) in zip(paths, converted_paths_before))
     if times_json is not None:
         with open(times_json,'w') as fd:
         #     fd.write(json.dumps(converted_paths_opt))
             json.dump(converted_paths_opt, fd)
 
-    n_successful_conversions = sum([1 for el in converted_paths_opt if el[2] == "s"])
+    success_paths, success_conv_paths = get_successful_conversions(converted_paths_opt)
+
+    n_successful_conversions = len(success_paths)
     print("RESULT: {} FILES IN, {} FILES OUT".format(len(converted_paths_before), n_successful_conversions), file=debug_output)
     return converted_paths_opt
 
@@ -292,9 +296,8 @@ def get_successful_conversions(converted_paths_opt: List[ConversionResult]) -> T
     :param converted_paths_opt: A list of `ConversionResult`s
     :return: A tuple containing: a list of source file locations and a list of token file locations
     """
-    successful_conversions = list(filter(lambda x: x[-1] == "s", converted_paths_opt))
+    successful_conversions = list(filter(lambda x: x[3] == "s", converted_paths_opt))
     paths = list(map(lambda x: x[0], successful_conversions))
     converted_paths = list(map(lambda x: x[1], successful_conversions))
 
     return paths, converted_paths
-

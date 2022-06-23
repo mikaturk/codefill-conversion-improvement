@@ -3,6 +3,16 @@ WARNING: This module contains outdated code for testing and comparison purposes 
 Refer to `convert.py` for actual implementations.
 """
 
+import traceback
+
+"""
+Comment out the following 2 lines to stop ignoring "FutureWarning"s produced by the original implementation
+as a result of using the deprecated `DataFrame.append` method
+"""
+
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 import datetime
 import os
 import shutil
@@ -14,7 +24,10 @@ import re
 import keyword
 import pandas as pd
 import ast
-sys.path.append("..")
+
+# Add the parent folder to the path for imports
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from cf_shared.convert import ConversionResult
 from cf_shared.utils import get_elapsed_us
 
 def multireplace(string, replacements, ignore_case=False):
@@ -51,7 +64,15 @@ def multireplace(string, replacements, ignore_case=False):
     # For each match, look up the new string in the replacements, being the key the normalized old string
     return pattern.sub(lambda match: replacements[normalize_old(match.group(0))], string)
 
-def convert_original(file, output_file):
+def convert_original(file: str, output_file: str):
+    """Warning: original version, only for reference timing
+    
+    Converts python source files into token files
+
+    :param file_path: The location of the source file
+    :param output_file: The location where the token file will be written
+    :return: returns nothing
+    """
     with open (file, "r") as f:
         text = f.read()  
 
@@ -70,7 +91,7 @@ def convert_original(file, output_file):
 
     # reomve * from the dictionary (handle from module import * statement)
     replacements.pop('*', None)
-    print('List of modules and libraries to replace:\n', replacements)
+    # print('List of modules and libraries to replace:\n', replacements)
 
     with open('med.py','w') as f:
         f.write(multireplace(text, replacements, ignore_case = True))
@@ -178,7 +199,7 @@ def convert_original(file, output_file):
             except:
                 clean = [str(line)]+clean
             if 'LOAD_GLOBAL' in clean:
-                print('found a global!')
+                # print('found a global!')
                 glbls.append((int(clean[0]),clean[-1].replace('(','').replace(')','')))
 
     for l,n in glbls:
@@ -205,7 +226,15 @@ def convert_original(file, output_file):
     with open(output_file,'w') as f:
         f.write(code_converted)
 
-def convert_old(file, output_file, tmp_dir):
+def convert_old(file: str, output_file: str, tmp_dir: str):
+    """Warning: old version (also known as the "first" improvement), only for reference timing
+
+    Converts python source files into token files
+
+    :param file_path: The location of the source file
+    :param output_file: The location where the token file will be written
+    :return: returns nothing
+    """
     with open (file, "r") as f:
         text = f.read()  
 
@@ -224,7 +253,7 @@ def convert_old(file, output_file, tmp_dir):
 
     # reomve * from the dictionary (handle from module import * statement)
     replacements.pop('*', None)
-    print('List of modules and libraries to replace:\n', replacements)
+    # print('List of modules and libraries to replace:\n', replacements)
 
     with open(tmp_dir + '/med.py','w') as f:
         f.write(multireplace(text, replacements, ignore_case = True))
@@ -289,7 +318,7 @@ def convert_old(file, output_file, tmp_dir):
 
     tokss = []
 
-    for row in toks.itertuples():
+    for index,row in toks.iterrows():
         if row.type == "INDENT":
             indent +=1
             continue
@@ -336,7 +365,7 @@ def convert_old(file, output_file, tmp_dir):
             except:
                 clean = [str(line)]+clean
             if 'LOAD_GLOBAL' in clean:
-                print('found a global!')
+                # print('found a global!')
                 glbls.append((int(clean[0]),clean[-1].replace('(','').replace(')','')))
 
     for l,n in glbls:
@@ -363,29 +392,56 @@ def convert_old(file, output_file, tmp_dir):
     with open(output_file,'w') as f:
         f.write(code_converted)
 
-def convert_optional_original(file_path, converted_path):
+def convert_optional_original(file_path, converted_path) -> ConversionResult:
+    """Runs `convert_original`, tracks the amount of time it takes in microseconds, and catches any errors it might throw
+    
+    :param file_path: The location of the source file
+    :param output_file: The location where the token file will be written
+
+    :return: A `ConversionResult` tuple containing information about the conversion
+    """
+    start_time = datetime.datetime.now()
+
     tmp_dir = tempfile.mkdtemp()
     cwd = os.getcwd()
+
+    file_path_abs = os.path.abspath(file_path)
+    converted_path_abs = os.path.abspath(converted_path)
+    os.chdir(tmp_dir)
+    error_str = None
+
     try:
-        file_path_abs = os.path.abspath(file_path)
-        converted_path_abs = os.path.abspath(converted_path)
-        os.chdir(tmp_dir)
         convert_original(file_path_abs, converted_path_abs)
-    except:
-        pass
+    except Exception as e:
+        exc_info = sys.exc_info()
+        error_str = ''.join(traceback.format_exception(*exc_info))
+
     os.chdir(cwd)
     shutil.rmtree(tmp_dir)
 
-def convert_optional_old(file_path, converted_path):
+    status = "s" if error_str is None else "f"
+
+    return (file_path, converted_path, get_elapsed_us(start_time), status, error_str)
+
+def convert_optional_old(file_path, converted_path) -> ConversionResult:
+    """Runs `convert_old`, tracks the amount of time it takes in microseconds, and catches any errors it might throw
+    
+    :param file_path: The location of the source file
+    :param output_file: The location where the token file will be written
+
+    :return: A `ConversionResult` tuple containing information about the conversion
+    """
+    start_time = datetime.datetime.now()
     tmp_dir = tempfile.mkdtemp()
+    error_str = None
 
     try:
-        start_time = datetime.datetime.now()
-
         convert_old(file_path, converted_path, tmp_dir)
+    except Exception as e:
+        exc_info = sys.exc_info()
+        error_str = ''.join(traceback.format_exception(*exc_info))
+    
+    shutil.rmtree(tmp_dir)
 
-        shutil.rmtree(tmp_dir)
-        return (file_path, converted_path, get_elapsed_us(start_time), "s")
-    except:
-        shutil.rmtree(tmp_dir)
-        return (file_path, converted_path, get_elapsed_us(start_time), "f")
+    status = "s" if error_str is None else "f"
+    return (file_path, converted_path, get_elapsed_us(start_time), status, error_str)
